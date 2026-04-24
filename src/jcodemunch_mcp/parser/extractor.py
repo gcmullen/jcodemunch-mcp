@@ -321,7 +321,7 @@ def parse_file(content: str, filename: str, language: str, source_bytes: Optiona
     elif language == "nim":
         symbols = _parse_nim_symbols(source_bytes, filename)
     elif language == "tcl":
-        symbols = _parse_tcl_symbols(source_bytes, filename)
+        symbols = _parse_tcl_native(source_bytes, filename)
     elif language == "dlang":
         symbols = _parse_dlang_symbols(source_bytes, filename)
     elif language in ("sass", "less", "styl"):
@@ -1784,8 +1784,14 @@ def _disambiguate_and_compute_complexity(
             ordinals[sym.id] = ordinals.get(sym.id, 0) + 1
             sym.id = f"{sym.id}~{ordinals[sym.id]}"
         if sym.kind in _CALLABLE_KINDS and sym.byte_length > 0:
-            body = source_bytes[sym.byte_offset:sym.byte_offset + sym.byte_length].decode("utf-8", errors="replace")
-            sym.cyclomatic, sym.max_nesting, sym.param_count = compute_complexity(body, sym.signature)
+            # TCL native parser already computes accurate complexity metrics;
+            # the generic compute_complexity cannot parse TCL brace-delimited
+            # parameter lists, so skip re-computation for TCL symbols.
+            if sym.language == "tcl" and sym.cyclomatic > 0:
+                pass
+            else:
+                body = source_bytes[sym.byte_offset:sym.byte_offset + sym.byte_length].decode("utf-8", errors="replace")
+                sym.cyclomatic, sym.max_nesting, sym.param_count = compute_complexity(body, sym.signature)
         result.append(sym)
 
     return result if has_duplicates else symbols
@@ -9049,11 +9055,134 @@ def _parse_nim_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
 
 
 # ---------------------------------------------------------------------------
-# Tcl custom parser
+# Tcl native parser (shells out to tclsh for 100% accurate parsing)
+# ---------------------------------------------------------------------------
+
+import json as _json
+import logging as _logging
+import shutil as _shutil
+import subprocess as _subprocess
+import tempfile as _tempfile
+from pathlib import Path as _Path
+
+_tcl_logger = _logging.getLogger(__name__)
+
+# Path to the TCL bridge script, co-located with this module.
+_TCL_BRIDGE_SCRIPT = str(_Path(__file__).parent / "tcl_parser_bridge.tcl")
+
+# Cache tclsh availability so we only look it up once.
+_tclsh_path: "str | None | bool" = False  # False = not checked yet
+
+
+def _find_tclsh() -> "str | None":
+    """Find tclsh on PATH, caching the result."""
+    global _tclsh_path
+    if _tclsh_path is not False:
+        return _tclsh_path  # type: ignore[return-value]
+    _tclsh_path = _shutil.which("tclsh")
+    if _tclsh_path is None:
+        _tcl_logger.debug("tclsh not found on PATH; TCL native parser unavailable")
+    return _tclsh_path
+
+
+def _parse_tcl_native(source_bytes: bytes, filename: str) -> "list[Symbol]":
+    """Extract symbols from Tcl source using the native tclsh bridge.
+
+    Writes source to a temp file, runs ``tclsh tcl_parser_bridge.tcl <tempfile>``,
+    parses the JSON output, and converts to Symbol objects.
+
+    Falls back to the tree-sitter-based ``_parse_tcl_symbols()`` if tclsh is
+    not installed or the bridge script fails.
+    """
+    tclsh = _find_tclsh()
+    if tclsh is None:
+        return _parse_tcl_symbols(source_bytes, filename)
+
+    # Write source to a temp file (tclsh reads from file, not stdin, to
+    # preserve the exact byte content and avoid encoding issues).
+    tmp_fd = None
+    tmp_path = None
+    try:
+        tmp_fd, tmp_path = _tempfile.mkstemp(suffix=".tcl", prefix="jcm_tcl_")
+        import os as _os
+        _os.write(tmp_fd, source_bytes)
+        _os.close(tmp_fd)
+        tmp_fd = None  # mark as closed
+
+        result = _subprocess.run(
+            [tclsh, _TCL_BRIDGE_SCRIPT, tmp_path],
+            capture_output=True,
+            timeout=30,
+        )
+
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            _tcl_logger.debug("tcl_parser_bridge.tcl failed (rc=%d): %s", result.returncode, stderr[:200])
+            return _parse_tcl_symbols(source_bytes, filename)
+
+        raw_json = result.stdout.decode("utf-8", errors="replace")
+        if not raw_json.strip():
+            return []
+
+        entries = _json.loads(raw_json)
+
+    except _subprocess.TimeoutExpired:
+        _tcl_logger.debug("tcl_parser_bridge.tcl timed out for %s", filename)
+        return _parse_tcl_symbols(source_bytes, filename)
+    except (_json.JSONDecodeError, OSError) as exc:
+        _tcl_logger.debug("tcl_parser_bridge.tcl error for %s: %s", filename, exc)
+        return _parse_tcl_symbols(source_bytes, filename)
+    finally:
+        if tmp_fd is not None:
+            import os as _os
+            _os.close(tmp_fd)
+        if tmp_path is not None:
+            import os as _os
+            try:
+                _os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    # Convert JSON entries to Symbol objects.
+    symbols: list[Symbol] = []
+    for entry in entries:
+        try:
+            sym_bytes = source_bytes[entry["byte_offset"]:entry["byte_offset"] + entry["byte_length"]]
+            symbols.append(Symbol(
+                id=make_symbol_id(filename, entry["qualified_name"], entry["kind"]),
+                file=filename,
+                name=entry["name"],
+                qualified_name=entry["qualified_name"],
+                kind=entry["kind"],
+                language="tcl",
+                signature=entry.get("signature", ""),
+                docstring=entry.get("docstring", ""),
+                parent=make_symbol_id(filename, entry["parent"], "class") if entry.get("parent") else None,
+                line=entry.get("line", 0),
+                end_line=entry.get("end_line", 0),
+                byte_offset=entry.get("byte_offset", 0),
+                byte_length=entry.get("byte_length", 0),
+                content_hash=compute_content_hash(sym_bytes) if sym_bytes else "",
+                decorators=entry.get("decorators", []),
+                keywords=entry.get("keywords", []),
+                call_references=entry.get("call_references", []),
+                cyclomatic=entry.get("cyclomatic", 0),
+                max_nesting=entry.get("max_nesting", 0),
+                param_count=entry.get("param_count", 0),
+            ))
+        except (KeyError, IndexError) as exc:
+            _tcl_logger.debug("Skipping malformed TCL symbol entry: %s", exc)
+            continue
+
+    return symbols
+
+
+# ---------------------------------------------------------------------------
+# Tcl tree-sitter parser (fallback when tclsh is not available)
 # ---------------------------------------------------------------------------
 
 def _parse_tcl_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
-    """Extract symbols from Tcl source code using tree-sitter."""
+    """Extract symbols from Tcl source code using tree-sitter (fallback)."""
     parser = get_parser("tcl")
     tree = parser.parse(source_bytes)
     symbols: list[Symbol] = []

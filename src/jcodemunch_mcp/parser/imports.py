@@ -421,6 +421,43 @@ def _extract_vue_imports(content: str) -> list[dict]:
     return edges
 
 
+# Tcl: package require <name> / source <filepath> / namespace import ::ns::*
+_TCL_PACKAGE_REQUIRE = re.compile(
+    r"""^\s*package\s+require\s+(?:-exact\s+)?(\S+)""", re.MULTILINE
+)
+_TCL_SOURCE = re.compile(
+    r"""^\s*source\s+["']?([^\s"']+)["']?""", re.MULTILINE
+)
+_TCL_NAMESPACE_IMPORT = re.compile(
+    r"""^\s*namespace\s+import\s+(?:-force\s+)?([\w:*]+)""", re.MULTILINE
+)
+
+
+def _extract_tcl_imports(content: str) -> list[dict]:
+    edges = []
+    seen: set[str] = set()
+
+    for m in _TCL_PACKAGE_REQUIRE.finditer(content):
+        pkg = m.group(1)
+        if pkg not in seen:
+            seen.add(pkg)
+            edges.append({"specifier": pkg, "names": []})
+
+    for m in _TCL_SOURCE.finditer(content):
+        path = m.group(1)
+        if path not in seen:
+            seen.add(path)
+            edges.append({"specifier": path, "names": []})
+
+    for m in _TCL_NAMESPACE_IMPORT.finditer(content):
+        ns = m.group(1)
+        if ns not in seen:
+            seen.add(ns)
+            edges.append({"specifier": ns, "names": []})
+
+    return edges
+
+
 _LANGUAGE_EXTRACTORS = {
     "javascript": _extract_js_imports,
     "typescript": _extract_js_imports,
@@ -447,6 +484,7 @@ _LANGUAGE_EXTRACTORS = {
     "asm": _extract_asm_imports,
     "vhdl": _extract_vhdl_imports,
     "verilog": _extract_verilog_imports,
+    "tcl": _extract_tcl_imports,
 }
 
 
