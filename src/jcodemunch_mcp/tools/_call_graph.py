@@ -94,6 +94,12 @@ def _callers_from_references(
     # Files that import sym's file + sym's own file (for same-file callers)
     importing_files = set(reverse_adj.get(sym_file, []))
     search_files = importing_files | {sym_file}
+    # Languages without a module import graph (TCL, shell, SQL, ...) will
+    # have `importing_files` empty. Restricting to just the defining file
+    # drops every cross-file caller. Widen the search to all source files
+    # in that case so call_references can still surface real callers.
+    if not importing_files and getattr(index, "source_files", None):
+        search_files = set(index.source_files)
 
     # Look up by (file, sym_name) for each candidate file
     sym_id = sym.get("id", "")

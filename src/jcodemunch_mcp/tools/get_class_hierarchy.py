@@ -17,6 +17,22 @@ _IMPLEMENTS_RE = re.compile(
 )
 # Python / Ruby style: class Foo(Bar, Baz)
 _PAREN_BASES_RE = re.compile(r'\bclass\s+\w[\w$]*\s*\(([^)]+)\)')
+# C++ / iTcl style: `class Foo : Bar, Baz` — used by the TCL native parser
+# for `class`, `itcl::class`, `itk::usual`, and `oo::class create` signatures
+# where inherit / superclass parents are joined with `: P1, P2, P3`.
+_COLON_BASES_RE = re.compile(
+    r'(?:\b(?:itcl::class|itk::usual|class)|oo::class\s+create)\s+[\w:]+\s*:\s*([^{]+?)(?:\s*\{|$)'
+)
+
+
+def _strip_leading_colons(name: str) -> str:
+    """Strip leading `::` from a fully-qualified TCL name for matching.
+
+    Bridge emits signatures with names like `::itk::Widget`; class_by_name
+    is keyed on the tokens as they appear in the class-decl, which often
+    lack the leading `::`.
+    """
+    return name.lstrip(":")
 
 
 def _parse_bases(signature: str) -> list[str]:
@@ -30,6 +46,11 @@ def _parse_bases(signature: str) -> list[str]:
 
     # implements Foo, Bar
     m = _IMPLEMENTS_RE.search(signature)
+    if m:
+        bases += [n.strip() for n in m.group(1).split(",") if n.strip()]
+
+    # iTcl / C++ style: `class Foo : Parent1, Parent2`
+    m = _COLON_BASES_RE.search(signature)
     if m:
         bases += [n.strip() for n in m.group(1).split(",") if n.strip()]
 
@@ -56,12 +77,19 @@ def _build_class_maps(symbols: list[dict]) -> tuple[dict[str, dict], dict[str, l
         name = sym.get("name", "")
         if name and name not in class_by_name:
             class_by_name[name] = sym
+        # Also register the `::`-stripped form for TCL-style fully-qualified
+        # names like `::itk::Widget`, so lookup by either `itk::Widget` or
+        # `::itk::Widget` resolves.
+        stripped = _strip_leading_colons(name)
+        if stripped and stripped != name and stripped not in class_by_name:
+            class_by_name[stripped] = sym
 
     children_of: dict[str, list[str]] = {}
     for sym in class_syms:
         for base in _parse_bases(sym.get("signature", "")):
-            if base in class_by_name:
-                children_of.setdefault(base, []).append(sym["name"])
+            lookup = base if base in class_by_name else _strip_leading_colons(base)
+            if lookup in class_by_name:
+                children_of.setdefault(lookup, []).append(sym["name"])
 
     return class_by_name, children_of
 

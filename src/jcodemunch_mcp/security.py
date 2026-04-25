@@ -355,7 +355,7 @@ def get_extra_ignore_patterns(call_patterns: Optional[list] = None) -> list:
 
 # --- Composite Filters ---
 
-DEFAULT_MAX_FILE_SIZE = 500 * 1024  # 500KB
+DEFAULT_MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
 DEFAULT_MAX_INDEX_FILES = 10_000
 MAX_INDEX_FILES_ENV_VAR = "JCODEMUNCH_MAX_INDEX_FILES"
 

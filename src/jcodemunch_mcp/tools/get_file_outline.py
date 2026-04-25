@@ -66,8 +66,13 @@ def _get_file_outline_single(
     symbol_objects = [_dict_to_symbol(s) for s in file_symbols]
     tree = build_symbol_tree(symbol_objects)
 
-    # Convert to output format
-    symbols_output = [_node_to_dict(n) for n in tree]
+    # Flatten the tree into a single list. The compact encoder's schema for
+    # this tool declares `symbols` as a flat table with a `parent` column
+    # (see encoding/schemas/get_file_outline.py), so nested `children` were
+    # being dropped on serialization — child methods of a class would
+    # disappear from file outlines. Flattening preserves every symbol and
+    # records each one's parent name explicitly.
+    symbols_output = _flatten_symbol_tree(tree)
 
     elapsed = (time.perf_counter() - start) * 1000
     response_bytes = len(json.dumps(symbols_output).encode("utf-8"))
@@ -211,3 +216,33 @@ def _node_to_dict(node) -> dict:
         result["children"] = [_node_to_dict(c) for c in node.children]
 
     return result
+
+
+def _flatten_symbol_tree(tree) -> list[dict]:
+    """Flatten a SymbolNode tree into a single list preserving parent info.
+
+    Each emitted dict carries a `parent` string (qualified name of the
+    enclosing symbol, or ``""`` for top-level). This matches the flat-table
+    layout the compact encoder expects.
+    """
+    out: list[dict] = []
+
+    def walk(nodes) -> None:
+        for n in nodes:
+            d = {
+                "id": n.symbol.id,
+                "kind": n.symbol.kind,
+                "name": n.symbol.name,
+                "signature": n.symbol.signature,
+                "summary": n.symbol.summary,
+                "line": n.symbol.line,
+                "parent": n.symbol.parent or "",
+            }
+            if n.symbol.decorators:
+                d["decorators"] = n.symbol.decorators
+            out.append(d)
+            if n.children:
+                walk(n.children)
+
+    walk(tree)
+    return out

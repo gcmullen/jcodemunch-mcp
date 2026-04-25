@@ -49,22 +49,24 @@ def _check_single(
     import_count = len(import_references)
 
     # ── Content-level check ─────────────────────────────────────────────────
-    # Find files where this identifier is *defined* (via symbol index)
-    # so we can skip them — finding the name in the defining file is not a "reference".
-    defining_files: set[str] = set()
+    # Find lines where this identifier is *defined* (via symbol index)
+    # so we can skip those specific lines. Skipping the entire defining
+    # file misses real references in non-definition contexts (e.g. iTcl
+    # methods invoked elsewhere in the same class via `-command "$this X"`).
+    defining_lines: dict[str, set[int]] = {}
     for sym in index.symbols:
         if sym.get("name", "").lower() == ident_lower:
             file_path = sym.get("file", "")
-            if file_path:
-                defining_files.add(file_path)
+            line = sym.get("line", 0)
+            if file_path and line:
+                defining_lines.setdefault(file_path, set()).add(line)
 
     content_references = []
 
     if search_content:
         content_dir = store._content_dir(owner, name)
         for file_path in index.source_files:
-            if file_path in defining_files:
-                continue
+            skip_lines = defining_lines.get(file_path, set())
 
             full_path = store._safe_content_path(content_dir, file_path)
             if not full_path or not full_path.exists():
@@ -78,9 +80,12 @@ def _check_single(
 
             file_matches = []
             for line_index, line in enumerate(content.split("\n")):
+                line_no = line_index + 1
+                if line_no in skip_lines:
+                    continue
                 if ident_lower in line.lower():
                     file_matches.append({
-                        "line": line_index + 1,
+                        "line": line_no,
                         "text": line.rstrip()[:200],
                     })
 

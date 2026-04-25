@@ -28,7 +28,10 @@ _SCALARS = (
 _META = (
     "timing_ms", "tokens_saved", "total_tokens_saved", "is_stale",
 )
-_JSON = ("languages", "tree", "stats")
+_JSON = (
+    "languages", "tree", "stats",
+    "symbol_kinds", "most_imported_files", "most_central_symbols",
+)
 
 
 def encode(tool: str, response: dict) -> tuple[str, str]:

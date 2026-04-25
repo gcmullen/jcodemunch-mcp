@@ -124,6 +124,27 @@ def _find_references_single(
                 "match_type": "named" if named_match else "specifier_stem",
             })
 
+    # Also include call_references-based usage sites. For languages without
+    # a module import graph (TCL, shell, SQL, ...) this is the only path
+    # that surfaces real call sites; for languages that do have imports it
+    # complements the import-based matches.
+    get_callers = getattr(index, "get_callers_by_name", None)
+    callers_by_name = get_callers() if get_callers else None
+    if callers_by_name:
+        for (caller_file, called_name), caller_ids in callers_by_name.items():
+            if not called_name:
+                continue
+            # Match bare name (e.g. sendMessage) or its `::`-stripped
+            # namespace-qualified form (e.g. ::foo::sendMessage → sendMessage).
+            base = called_name.lower()
+            tail = base.rsplit("::", 1)[-1].lstrip(":")
+            if base == ident_lower or tail == ident_lower:
+                file_matches.setdefault(caller_file, []).append({
+                    "specifier": "",
+                    "names": [called_name],
+                    "match_type": "call_reference",
+                })
+
     results = [{"file": f, "matches": m} for f, m in file_matches.items()]
     results.sort(key=lambda r: r["file"])
 
