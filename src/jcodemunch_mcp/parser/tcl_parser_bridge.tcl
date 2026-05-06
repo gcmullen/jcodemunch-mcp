@@ -1073,14 +1073,17 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
             continue
 
         } elseif {$kw eq "itk_option" && [llength $parts] >= 3} {
-            # itk_option define -optionName -switchName ClassName default
+            # itk_option define -switchName resourceName ClassName default ?config?
+            # The -switch form (with leading dash) is the canonical iTk
+            # identifier — call sites use `widget configure -switchName`
+            # and `$itk_option(-switchName)`. Preserve the dash in name
+            # and qualified_name so lexical lookup matches every use.
             set sub [lindex $parts 1]
             if {$sub eq "define" && [llength $parts] >= 5} {
                 set option_token [lindex $parts 2]
-                set option_short [string trimleft $option_token "-"]
-                if {$option_short eq ""} { set option_short $option_token }
+                if {$option_token eq ""} { continue }
 
-                emit_symbol $option_short "${scope}::${option_short}" "constant" \
+                emit_symbol $option_token "${scope}::${option_token}" "constant" \
                     "itk_option define $option_token" "" \
                     $abs_start $abs_end $line_offsets $char_byte_map $scope \
                     0 0 0 {} {} [list "itk_option"]
@@ -1156,11 +1159,16 @@ proc parse_itcl_body {cmd_text start_char end_char line_offsets char_byte_map sc
     set short_name [namespace tail $target]
     if {$short_name eq ""} { set short_name $target }
 
+    # Method belongs to the class encoded in the qualified target, not
+    # the dispatch scope. The earlier `*::*` guard ensures a qualifier
+    # exists, so namespace qualifiers always returns the class name.
+    set class_scope [namespace qualifiers $qualified]
+
     set sig "$kw $target \{$args_str\}"
     set annotations [detect_annotations $body]
 
     emit_symbol $short_name $qualified "method" $sig "" \
-        $start_char $end_char $line_offsets $char_byte_map $scope \
+        $start_char $end_char $line_offsets $char_byte_map $class_scope \
         [count_cyclomatic $body] [count_max_nesting $body] \
         [count_params $args_str] [extract_calls $body] \
         $annotations [list "itcl_body"]
@@ -1181,11 +1189,14 @@ proc parse_itcl_configbody {cmd_text start_char end_char line_offsets char_byte_
     set short_name [namespace tail $target]
     if {$short_name eq ""} { set short_name $target }
 
+    # Configbody belongs to the class encoded in the qualified target.
+    set class_scope [namespace qualifiers $qualified]
+
     set sig "$kw $target"
     set annotations [detect_annotations $body]
 
     emit_symbol $short_name $qualified "method" $sig "" \
-        $start_char $end_char $line_offsets $char_byte_map $scope \
+        $start_char $end_char $line_offsets $char_byte_map $class_scope \
         [count_cyclomatic $body] [count_max_nesting $body] \
         0 [extract_calls $body] \
         $annotations [list "configbody"]
