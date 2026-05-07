@@ -672,14 +672,27 @@ proc emit_symbol {name qualified kind sig docstring start_char end_char
     # inside a class body (`public method foo {args}`) and later as an
     # out-of-line body (`body Class::foo {args} {...}`). The body has real
     # code, calls, cyclomatic, etc. — replace the decl with the body.
+    # Class-scoped procs (`public proc name {args}` inside an itcl::class)
+    # follow the same shape and get the same dedup, just with kind=function
+    # rather than kind=method.
+    set dedup_kind ""
     if {$kind eq "method"} {
+        set dedup_kind "method"
+    } elseif {$kind eq "function" && (
+        "class_proc" in $keywords
+        || "class_proc_decl" in $keywords
+        || "class_proc_body" in $keywords
+    )} {
+        set dedup_kind "function"
+    }
+    if {$dedup_kind ne ""} {
         set is_decl [expr {"method_decl" in $keywords || "class_proc_decl" in $keywords}]
         if {[info exists method_registry($qualified)]} {
-            lassign $method_registry($qualified) prev_pos prev_is_decl
+            lassign $method_registry($qualified) prev_pos prev_is_decl prev_kind
             if {$prev_is_decl && !$is_decl} {
                 # Body supersedes prior decl — replace in place.
                 lset symbols $prev_pos $sym
-                set method_registry($qualified) [list $prev_pos 0]
+                set method_registry($qualified) [list $prev_pos 0 $prev_kind]
             }
             # Else: duplicate. Skip (either both decls, or prev is already
             # a body — TCL redefinition last-wins, but for static analysis
@@ -687,7 +700,7 @@ proc emit_symbol {name qualified kind sig docstring start_char end_char
             return
         }
         lappend symbols $sym
-        set method_registry($qualified) [list [expr {[llength $symbols] - 1}] $is_decl]
+        set method_registry($qualified) [list [expr {[llength $symbols] - 1}] $is_decl $dedup_kind]
         return
     }
 
@@ -1146,6 +1159,7 @@ proc parse_itcl_body {cmd_text start_char end_char line_offsets char_byte_map sc
     # Handles: itcl::body Class::method args body (out-of-line method definition)
     #          ::itcl::body and bare `body` (dispatcher guards bare form to
     #          require a Class::method target).
+    variable method_registry
     if {[catch {set parts [lrange $cmd_text 0 end]}]} { return }
     if {[llength $parts] < 4} { return }
     set kw [lindex $parts 0]
@@ -1167,11 +1181,26 @@ proc parse_itcl_body {cmd_text start_char end_char line_offsets char_byte_map sc
     set sig "$kw $target \{$args_str\}"
     set annotations [detect_annotations $body]
 
-    emit_symbol $short_name $qualified "method" $sig "" \
+    # Match the body's kind to its decl: when a prior `public proc`/`private proc`
+    # inside the class registered the same qualified name as kind=function, this
+    # body is the out-of-line definition for that proc, not a method. Tagging
+    # accordingly lets emit_symbol's dedup pair them; otherwise getZ-style class
+    # procs emit twice (kind=function decl + kind=method body).
+    set body_kind "method"
+    set body_keywords [list "itcl_body"]
+    if {[info exists method_registry($qualified)]} {
+        lassign $method_registry($qualified) - - prev_kind
+        if {$prev_kind eq "function"} {
+            set body_kind "function"
+            lappend body_keywords "class_proc_body"
+        }
+    }
+
+    emit_symbol $short_name $qualified $body_kind $sig "" \
         $start_char $end_char $line_offsets $char_byte_map $class_scope \
         [count_cyclomatic $body] [count_max_nesting $body] \
         [count_params $args_str] [extract_calls $body] \
-        $annotations [list "itcl_body"]
+        $annotations $body_keywords
 }
 
 proc parse_itcl_configbody {cmd_text start_char end_char line_offsets char_byte_map scope} {
@@ -1278,6 +1307,16 @@ proc parse_body {body base_offset line_offsets char_byte_map scope {emit_script 
             catch {set second [lindex $trimmed 1]}
             if {[string match "*::*" $second]} {
                 parse_itcl_body $trimmed $abs_start $abs_end $line_offsets $char_byte_map $scope
+                set dispatched 1
+            }
+        } elseif {$first_word eq "configbody"} {
+            # Bare `configbody Class::option body` — iTcl option-change hook,
+            # equivalent to `itcl::configbody`. Same `*::*` guard as bare body
+            # so we don't misfire on commands named configbody.
+            set second ""
+            catch {set second [lindex $trimmed 1]}
+            if {[string match "*::*" $second]} {
+                parse_itcl_configbody $trimmed $abs_start $abs_end $line_offsets $char_byte_map $scope
                 set dispatched 1
             }
         } elseif {$first_word eq "class"} {

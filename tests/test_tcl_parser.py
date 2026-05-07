@@ -222,9 +222,12 @@ class TestBasicProcs:
 # ---------------------------------------------------------------------------
 
 class TestNamespaces:
-    def test_namespace_as_class(self):
+    def test_namespace_emits_namespace_kind(self):
+        # `namespace eval` is structurally a TCL namespace, not an iTcl class.
+        # Keeping the kinds distinct preserves the namespace ↔ class
+        # distinction (TCL → C++) and matches LSP SymbolKind semantics.
         symbols = parse_file(NAMESPACE_SOURCE, "ns.tcl", "tcl")
-        ns = [s for s in symbols if s.kind == "class"]
+        ns = [s for s in symbols if s.kind == "namespace"]
         assert len(ns) == 1
         assert ns[0].qualified_name == "::app::config"
 
@@ -244,7 +247,7 @@ class TestNamespaces:
 
     def test_namespace_exports_in_decorators(self):
         symbols = parse_file(NAMESPACE_SOURCE, "ns.tcl", "tcl")
-        ns = [s for s in symbols if s.kind == "class"][0]
+        ns = [s for s in symbols if s.kind == "namespace"][0]
         assert "get_setting" in ns.decorators
         assert "set_setting" in ns.decorators
 
