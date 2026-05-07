@@ -410,27 +410,62 @@ proc split_commands {content} {
 # Complexity analysis
 # ---------------------------------------------------------------------------
 
-# Count cyclomatic complexity branches in a TCL body.
+# Count cyclomatic complexity branches in a TCL body. Uses the TCL-native
+# command walker so branch keywords inside "..." strings are not counted
+# (e.g. puts "do you want to retry?" no longer falsely scores a branch).
 proc count_cyclomatic {body} {
     set complexity 1
-    # Count branching keywords
-    foreach kw {if elseif while for foreach switch catch try} {
-        # Match keyword at word boundary (preceded by whitespace/newline/brace or start)
-        set count [llength [regexp -all -inline "(?:^|\\s)$kw\\s" $body]]
-        incr complexity $count
-    }
-    # Count boolean operators (short-circuit branches)
-    incr complexity [llength [regexp -all -inline {&&|\|\|} $body]]
+    incr complexity [_count_cyclo_walk $body]
     return $complexity
 }
 
-# Count maximum brace nesting depth in a body.
+proc _count_cyclo_walk {body} {
+    set branch_kws {if elseif while for foreach switch catch try}
+    set count 0
+    if {[catch {set commands [split_commands $body]}]} { return 0 }
+    foreach cmd_info $commands {
+        set cmd_text [lindex $cmd_info 0]
+        set trimmed [string trimleft $cmd_text]
+        if {[string index $trimmed 0] eq "#"} continue
+        if {[catch {set words [lrange $cmd_text 0 end]}]} continue
+        if {[llength $words] == 0} continue
+        set first [lindex $words 0]
+        if {$first in $branch_kws} { incr count }
+        # Short-circuit boolean operators inside expression args. Walk
+        # per-word so operators inside string-quoted args are excluded
+        # (the lrange unwrap keeps "..." content as one word but operator
+        # FP rate is low; conditions appear in brace-quoted args).
+        for {set j 1} {$j < [llength $words]} {incr j} {
+            set w [lindex $words $j]
+            incr count [llength [regexp -all -inline {&&|\|\|} $w]]
+        }
+        # Recurse into argument bodies that look like code blocks.
+        for {set j 1} {$j < [llength $words]} {incr j} {
+            set w [lindex $words $j]
+            if {[string length $w] < 3} continue
+            if {![regexp {[\n\[;]} $w]} continue
+            set first_ch [string index $w 0]
+            set last_ch  [string index $w end]
+            if {$first_ch eq "\[" || $last_ch eq "\]"} continue
+            incr count [_count_cyclo_walk $w]
+        }
+    }
+    return $count
+}
+
+# Count maximum brace nesting depth in a body, ignoring braces that are
+# inside double-quoted strings (where they are literal characters, not
+# block delimiters). Backslash escapes are honored as 2-char units.
 proc count_max_nesting {body} {
     set max_depth 0
     set depth 0
+    set in_quote 0
     set len [string length $body]
     for {set i 0} {$i < $len} {incr i} {
         set ch [string index $body $i]
+        if {$ch eq "\\" && [expr {$i + 1}] < $len} { incr i; continue }
+        if {$ch eq "\""} { set in_quote [expr {!$in_quote}]; continue }
+        if {$in_quote} continue
         if {$ch eq "\{"} {
             incr depth
             if {$depth > $max_depth} { set max_depth $depth }
@@ -626,59 +661,59 @@ proc _extract_brackets {text skip} {
 # Annotation / spaghetti detection
 # ---------------------------------------------------------------------------
 
-# Detect spaghetti-indicating patterns in a proc body.
+# Detect spaghetti-indicating patterns in a proc body. Uses the TCL-native
+# command walker so keywords inside "..." string literals (e.g. an error
+# message that mentions uplevel) do not produce false annotations.
 proc detect_annotations {body} {
     set annotations {}
+    _detect_annotations_walk $body annotations
+    return $annotations
+}
 
-    # uplevel — executes code in caller's stack frame
-    if {[regexp {(?:^|[\s\[\{;])uplevel\s} $body]} {
-        lappend annotations "uplevel"
-    }
-
-    # upvar — aliases variables from caller's frame
-    if {[regexp {(?:^|[\s\[\{;])upvar\s} $body]} {
-        lappend annotations "upvar"
-    }
-
-    # global variable access
-    if {[regexp {(?:^|[\s\[\{;])global\s} $body]} {
-        lappend annotations "global_access"
-    }
-
-    # Dynamic command construction via eval
-    if {[regexp {(?:^|[\s\[\{;])eval\s} $body]} {
-        lappend annotations "dynamic_eval"
-    }
-
-    # Variable command dispatch ($cmd or [set cmd] patterns)
-    if {[regexp {\$\w+\s} $body] && [regexp {(?:^|[\s\[;])\$\w+\s} $body]} {
-        # More specific: variable used as command name
-        if {[regexp {(?:^|[\[;\n])\s*\$\w+} $body]} {
-            lappend annotations "dynamic_dispatch"
+proc _detect_annotations_walk {body annoVar} {
+    upvar 1 $annoVar annotations
+    if {[catch {set commands [split_commands $body]}]} return
+    foreach cmd_info $commands {
+        set cmd_text [lindex $cmd_info 0]
+        set trimmed [string trimleft $cmd_text]
+        if {[string index $trimmed 0] eq "#"} continue
+        if {[catch {set words [lrange $cmd_text 0 end]}]} continue
+        if {[llength $words] == 0} continue
+        set first [lindex $words 0]
+        switch -- $first {
+            "uplevel"   { _add_anno annotations "uplevel" }
+            "upvar"     { _add_anno annotations "upvar" }
+            "global"    { _add_anno annotations "global_access" }
+            "eval"      { _add_anno annotations "dynamic_eval" }
+            "coroutine" { _add_anno annotations "coroutine" }
+            "rename"    { _add_anno annotations "command_rename" }
+            "interp"    { _add_anno annotations "interp_manipulation" }
+        }
+        # trace add variable — first three words
+        if {$first eq "trace" && [llength $words] >= 3 && \
+            [lindex $words 1] eq "add" && [lindex $words 2] eq "variable"} {
+            _add_anno annotations "variable_trace"
+        }
+        # Variable command dispatch — first word is a $-var
+        if {[string index $first 0] eq "\$"} {
+            _add_anno annotations "dynamic_dispatch"
+        }
+        # Recurse into argument bodies that look like code blocks.
+        for {set j 1} {$j < [llength $words]} {incr j} {
+            set w [lindex $words $j]
+            if {[string length $w] < 3} continue
+            if {![regexp {[\n\[;]} $w]} continue
+            set first_ch [string index $w 0]
+            set last_ch  [string index $w end]
+            if {$first_ch eq "\[" || $last_ch eq "\]"} continue
+            _detect_annotations_walk $w annotations
         }
     }
+}
 
-    # Variable traces
-    if {[regexp {(?:^|[\s\[\{;])trace\s+add\s+variable} $body]} {
-        lappend annotations "variable_trace"
-    }
-
-    # Coroutine usage
-    if {[regexp {(?:^|[\s\[\{;])coroutine\s} $body]} {
-        lappend annotations "coroutine"
-    }
-
-    # rename — can redefine built-in commands
-    if {[regexp {(?:^|[\s\[\{;])rename\s} $body]} {
-        lappend annotations "command_rename"
-    }
-
-    # interp — nested interpreter manipulation
-    if {[regexp {(?:^|[\s\[\{;])interp\s} $body]} {
-        lappend annotations "interp_manipulation"
-    }
-
-    return $annotations
+proc _add_anno {annoVar name} {
+    upvar 1 $annoVar annotations
+    if {$name ni $annotations} { lappend annotations $name }
 }
 
 # ---------------------------------------------------------------------------
