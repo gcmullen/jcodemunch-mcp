@@ -603,11 +603,56 @@ proc _extract_collect {body skip} {
         # foreach var list body — only the last arg is the body. Skipping
         # the intermediate var/list args avoids capturing list-literal
         # elements (e.g. foreach x {a b c} {...}) as false-positive callees.
-        if {$first eq "foreach" && [llength $words] >= 4} {
+        # lmap shares foreach's grammar (var list body, optionally with
+        # additional var-list pairs); same last-arg-is-body rule applies.
+        if {($first eq "foreach" || $first eq "lmap") && [llength $words] >= 4} {
             set body_arg [lindex $words end]
             if {[string length $body_arg] >= 3} {
                 foreach c [_extract_collect $body_arg $skip] { lappend out $c }
             }
+            continue
+        }
+
+        # dict for {k v} dictVar body
+        # dict with dictVar body
+        # dict update dictVar k1 v1 ?k2 v2? ... body
+        # All three put the body at the last position; var/key/value args
+        # in between are bare tokens that should not recurse-poison.
+        if {$first eq "dict" && [llength $words] >= 4} {
+            set sub [lindex $words 1]
+            if {$sub in {for with update}} {
+                set body_arg [lindex $words end]
+                if {[string length $body_arg] >= 3} {
+                    foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+                }
+                continue
+            }
+        }
+
+        # apply {arglist body ?namespace?} ?arg1 arg2 ...?. The lambda
+        # spec is one list arg; body lives at index 1 inside that list.
+        if {$first eq "apply" && [llength $words] >= 2} {
+            set lambda [lindex $words 1]
+            if {![catch {set lparts [lrange $lambda 0 end]}]
+                && [llength $lparts] >= 2} {
+                set body_arg [lindex $lparts 1]
+                foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+            }
+            continue
+        }
+
+        # coroutine name script ?args?. The script is the body slot
+        # at position 2. Subsequent args are pass-through values.
+        if {$first eq "coroutine" && [llength $words] >= 3} {
+            set body_arg [lindex $words 2]
+            foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+            continue
+        }
+
+        # time script ?count?. Script is at position 1; count is numeric.
+        if {$first eq "time" && [llength $words] >= 2} {
+            set body_arg [lindex $words 1]
+            foreach c [_extract_collect $body_arg $skip] { lappend out $c }
             continue
         }
 

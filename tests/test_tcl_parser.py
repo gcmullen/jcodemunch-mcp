@@ -774,3 +774,94 @@ class TestSwitchTryPrecision:
         assert "MISSING" not in sym.call_references
         assert "OPERATION" not in sym.call_references
         assert "CANCEL" not in sym.call_references
+
+
+# ---------------------------------------------------------------------------
+# Tests: lmap / apply / dict for|with|update / coroutine / time precision
+# ---------------------------------------------------------------------------
+
+BODY_TAKING_FIXTURES = '''\
+proc lmap_single_var {} {
+    return [lmap x $list {transform $x}]
+}
+
+proc lmap_multi_var {} {
+    return [lmap x $a y $b {combine $x $y}]
+}
+
+proc apply_lambda {} {
+    set sq [list x {return [calculateSquare $x]}]
+    apply $sq 5
+    apply {{x y} {sumValues $x $y}} 3 4
+}
+
+proc dict_for_body {} {
+    dict for {k v} $config {processEntry $k $v}
+}
+
+proc dict_with_body {} {
+    dict with rec {applyRecord $name $value}
+}
+
+proc dict_update_body {} {
+    dict update myvar a aval b bval {persistChanges $aval $bval}
+}
+
+proc coroutine_body {} {
+    coroutine genX produceValues 1 100
+    coroutine genY {worker $args}
+}
+
+proc time_body {} {
+    set elapsed [time {timedOperation $arg} 100]
+}
+'''
+
+
+class TestBodyTakingPrecision:
+    def _calls(self, name):
+        symbols = parse_file(BODY_TAKING_FIXTURES, "bodies.tcl", "tcl")
+        return [s for s in symbols if s.name == name][0].call_references
+
+    def test_lmap_single_var_body(self):
+        c = self._calls("lmap_single_var")
+        assert "transform" in c
+
+    def test_lmap_multi_var_body(self):
+        c = self._calls("lmap_multi_var")
+        assert "combine" in c
+
+    def test_apply_lambda_body(self):
+        c = self._calls("apply_lambda")
+        # First lambda is via $sq variable so its body is invisible at
+        # static-analysis time. Inline lambda is decoded.
+        assert "sumValues" in c
+
+    def test_dict_for_body(self):
+        c = self._calls("dict_for_body")
+        assert "processEntry" in c
+        # Var names {k v} must NOT be captured.
+        assert "k" not in c
+        assert "v" not in c
+
+    def test_dict_with_body(self):
+        c = self._calls("dict_with_body")
+        assert "applyRecord" in c
+
+    def test_dict_update_body(self):
+        c = self._calls("dict_update_body")
+        assert "persistChanges" in c
+        # update key/var args (a, aval, b, bval) must NOT be captured.
+        assert "a" not in c
+        assert "b" not in c
+        assert "aval" not in c
+        assert "bval" not in c
+
+    def test_coroutine_body(self):
+        c = self._calls("coroutine_body")
+        assert "produceValues" in c
+        assert "worker" in c
+
+    def test_time_body(self):
+        c = self._calls("time_body")
+        assert "timedOperation" in c
