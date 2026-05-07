@@ -583,10 +583,20 @@ proc _extract_collect {body skip} {
 
         # eval / uplevel concatenate their args and re-evaluate as one
         # command. Join the rest of the words and recurse on the result so
-        # the embedded dispatch surfaces.
+        # the embedded dispatch surfaces. uplevel takes an optional level
+        # token (digits, optionally with leading #) at position 1; skip it
+        # so the join doesn't start with `#0` (which would then look like a
+        # comment line to split_commands).
         if {$first in $concat_cmds && [llength $words] >= 2} {
-            set joined [join [lrange $words 1 end] " "]
-            foreach c [_extract_collect $joined $skip] { lappend out $c }
+            set start_idx 1
+            if {$first eq "uplevel"} {
+                set lev [lindex $words 1]
+                if {[regexp {^#?\d+$} $lev]} { set start_idx 2 }
+            }
+            if {$start_idx < [llength $words]} {
+                set joined [join [lrange $words $start_idx end] " "]
+                foreach c [_extract_collect $joined $skip] { lappend out $c }
+            }
             continue
         }
 
@@ -611,6 +621,75 @@ proc _extract_collect {body skip} {
                 if {$w in {then else elseif}} continue
                 if {[string length $w] < 2} continue
                 foreach c [_extract_collect $w $skip] { lappend out $c }
+            }
+            continue
+        }
+
+        # try body ?on errcode varlist body? ... ?finally body?. Body args
+        # live at fixed positions relative to the on/trap/finally keywords;
+        # errcode and varlist between them are list literals (e.g.
+        # {TCL ERROR DICT MISSING}) that must NOT recurse-poison.
+        if {$first eq "try" && [llength $words] >= 2} {
+            set body_arg [lindex $words 1]
+            foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+            set j 2
+            while {$j < [llength $words]} {
+                set kw [lindex $words $j]
+                if {$kw eq "on" || $kw eq "trap"} {
+                    if {$j + 3 < [llength $words]} {
+                        set body_arg [lindex $words [expr {$j + 3}]]
+                        foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+                    }
+                    incr j 4
+                } elseif {$kw eq "finally"} {
+                    if {$j + 1 < [llength $words]} {
+                        set body_arg [lindex $words [expr {$j + 1}]]
+                        foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+                    }
+                    incr j 2
+                } else {
+                    incr j
+                }
+            }
+            continue
+        }
+
+        # switch ?options? string ?pattern body ...?
+        # switch ?options? string {pattern body pattern body ...}
+        # Pattern args are literal match patterns (often {literal} brace
+        # blocks). Recursing on them treats pattern words as commands.
+        # Walk past leading -options, skip the match string, then recurse
+        # only on the BODY half of each pair. `-` body marks fallthrough.
+        if {$first eq "switch" && [llength $words] >= 3} {
+            set j 1
+            while {$j < [llength $words]} {
+                set w [lindex $words $j]
+                if {$w eq "-"} { incr j; break }
+                if {[string index $w 0] eq "-"} {
+                    if {$w in {-matchvar -indexvar}} { incr j 2 } else { incr j }
+                } else {
+                    break
+                }
+            }
+            # skip the match-string arg
+            incr j
+            if {$j == [llength $words] - 1} {
+                # all-in-one form: single brace arg containing pat/body pairs
+                set inner [lindex $words $j]
+                if {![catch {set pairs [lrange $inner 0 end]}]} {
+                    for {set k 1} {$k < [llength $pairs]} {incr k 2} {
+                        set body_arg [lindex $pairs $k]
+                        if {$body_arg eq "-"} continue
+                        foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+                    }
+                }
+            } else {
+                # pat body pat body ... directly as args
+                for {set k [expr {$j + 1}]} {$k < [llength $words]} {incr k 2} {
+                    set body_arg [lindex $words $k]
+                    if {$body_arg eq "-"} continue
+                    foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+                }
             }
             continue
         }

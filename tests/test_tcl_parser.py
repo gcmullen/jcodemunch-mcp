@@ -458,3 +458,319 @@ class TestFallback:
         names = {s.name for s in symbols}
         assert "greet" in names
         assert "add" in names
+
+
+# ---------------------------------------------------------------------------
+# Tests: TCL-native call extraction — codify the architectural fixes that
+# moved extract_calls off raw regex onto split_commands + lrange list
+# semantics. Each test pins down one class of bug that the regex-era
+# implementation either missed or false-positively captured.
+# ---------------------------------------------------------------------------
+
+NATIVE_CALL_FIXTURES = '''\
+proc string_arg_no_fp {} {
+    addInput "$systemIdle contents {} {supporting device}"
+    deleteInput "$systemIdle contents"
+}
+
+proc eval_prefix_dispatch {args} {
+    eval $itk_component(notebook) addChildVisibilityControl $args
+}
+
+proc uplevel_prefix_dispatch {} {
+    uplevel #0 $self handleEvent
+}
+
+proc inline_brace_foreach {} {
+    foreach bl [getBeamlines] {$itk_component(beamlines) insert 0 $bl}
+}
+
+proc single_command_if {} {
+    if {$x} {realCallA}
+    if {$y} {do1} elseif {$z} {do2} else {do3}
+}
+
+proc bracket_dispatch {} {
+    set v [$obj computeValue $arg]
+}
+
+proc nsqualified_no_leading {} {
+    DCS::DeviceFactory::getObject
+    set f [DCS::Factory::lookup foo]
+}
+
+proc nsqualified_with_leading {} {
+    ::Logger::log "hello"
+}
+
+proc literal_list_no_fp {} {
+    foreach x {alpha beta gamma} {
+        consume $x
+    }
+    set L {one two three}
+}
+
+proc comment_line_ignored {} {
+    realCall
+    #fakeCall in a comment line should not become a callee
+}
+'''
+
+
+class TestExtractCallsNative:
+    def _calls_for(self, name):
+        symbols = parse_file(NATIVE_CALL_FIXTURES, "native.tcl", "tcl")
+        return [s for s in symbols if s.name == name][0].call_references
+
+    def test_string_arg_does_not_capture_word_inside_quotes(self):
+        # `{supporting device}` lives inside a "..." quoted argument; lrange
+        # treats the whole string as a single word so words inside it are
+        # never mistaken for code.
+        calls = self._calls_for("string_arg_no_fp")
+        assert "addInput" in calls
+        assert "deleteInput" in calls
+        assert "supporting" not in calls
+        assert "contents" not in calls
+
+    def test_eval_prefix_dispatch_resolves(self):
+        # `eval $obj method args` concatenates and re-evaluates as one
+        # command; the inner method must surface as a callee.
+        calls = self._calls_for("eval_prefix_dispatch")
+        assert "addChildVisibilityControl" in calls
+
+    def test_uplevel_prefix_dispatch_resolves(self):
+        calls = self._calls_for("uplevel_prefix_dispatch")
+        assert "handleEvent" in calls
+
+    def test_inline_brace_foreach_body_is_recursed(self):
+        # Body in `foreach v $L {$obj method args}` has no whitespace before
+        # `{`, but lrange reaches the body word and the foreach-special path
+        # recurses into it.
+        calls = self._calls_for("inline_brace_foreach")
+        assert "insert" in calls
+        assert "getBeamlines" in calls  # via bracket walker
+
+    def test_single_command_if_body_is_recursed(self):
+        # `if {$x} {realCallA}` body is a lone token; the if-special path
+        # treats every non-keyword arg as a body candidate so single-cmd
+        # bodies still surface.
+        calls = self._calls_for("single_command_if")
+        assert "realCallA" in calls
+        # if/elseif/else chain — every branch body captured.
+        assert "do1" in calls
+        assert "do2" in calls
+        assert "do3" in calls
+
+    def test_bracket_dispatch_resolved(self):
+        # `[$obj method]` — bracket walker recurses into the substitution.
+        calls = self._calls_for("bracket_dispatch")
+        assert "computeValue" in calls
+
+    def test_namespace_qualified_call_no_leading(self):
+        # `Foo::Bar::baz` (without leading `::`) — namespace-qualified
+        # match in extract_calls' Pattern A.
+        calls = self._calls_for("nsqualified_no_leading")
+        assert "DCS::DeviceFactory::getObject" in calls
+        assert "DCS::Factory::lookup" in calls
+
+    def test_namespace_qualified_call_with_leading(self):
+        calls = self._calls_for("nsqualified_with_leading")
+        assert "::Logger::log" in calls
+
+    def test_literal_list_arg_does_not_fp(self):
+        # `foreach var {a b c} body` — the list literal is the var-list
+        # slot, not code; `a`/`b`/`c` must NOT become callees. Likewise
+        # `set L {one two three}` — `one` must not become a callee.
+        calls = self._calls_for("literal_list_no_fp")
+        assert "consume" in calls          # foreach body did recurse
+        assert "alpha" not in calls
+        assert "beta" not in calls
+        assert "gamma" not in calls
+        assert "one" not in calls
+        assert "two" not in calls
+        assert "three" not in calls
+
+    def test_comment_line_does_not_pollute_callees(self):
+        calls = self._calls_for("comment_line_ignored")
+        assert "realCall" in calls
+        assert "fakeCall" not in calls
+
+
+# ---------------------------------------------------------------------------
+# Tests: 3-arg iTcl constructor form — `constructor args init body` was
+# previously emitted with the empty init slot as the body, dropping every
+# captured callee for the affected constructors.
+# ---------------------------------------------------------------------------
+
+THREE_ARG_CTOR_SOURCE = '''\
+itcl::class Widget {
+    inherit ::itk::Widget
+    constructor { args } { } {
+        registerWith $self
+        $self handleAttributeUpdate
+        eval itk_initialize $args
+    }
+}
+
+itcl::class TwoArgWidget {
+    constructor { args } {
+        legacyTwoArgInit $args
+    }
+}
+'''
+
+
+class TestThreeArgConstructor:
+    def test_3arg_ctor_body_is_parsed(self):
+        symbols = parse_file(THREE_ARG_CTOR_SOURCE, "ctor.tcl", "tcl")
+        ctor = [s for s in symbols if s.name == "constructor"
+                and "Widget::" in s.qualified_name
+                and "TwoArg" not in s.qualified_name][0]
+        assert "registerWith" in ctor.call_references
+        assert "handleAttributeUpdate" in ctor.call_references
+        assert "itk_initialize" in ctor.call_references
+
+    def test_2arg_ctor_form_still_works(self):
+        symbols = parse_file(THREE_ARG_CTOR_SOURCE, "ctor.tcl", "tcl")
+        ctor = [s for s in symbols if s.name == "constructor"
+                and "TwoArg" in s.qualified_name][0]
+        assert "legacyTwoArgInit" in ctor.call_references
+
+
+# ---------------------------------------------------------------------------
+# Tests: count_cyclomatic / count_max_nesting / detect_annotations are
+# string-aware. Tokens inside "..." literals must not be counted.
+# ---------------------------------------------------------------------------
+
+STRING_AWARE_METRICS = '''\
+proc cyclo_with_string_keyword {} {
+    # Body has one real `if` branch; the rest live inside string literals.
+    if {$x} {
+        puts "if you want, type while followed by foreach"
+        return [list "for x in y" "switch yes"]
+    }
+}
+
+proc nesting_with_string_braces {} {
+    # Real depth = 2; the string contains fake braces that must not count.
+    if {$x} {
+        while {$y} {
+            puts "data: {a {b}}"
+        }
+    }
+}
+
+proc annotations_in_strings {} {
+    # `error "use of uplevel..."` mentions uplevel literally; no annotation.
+    error "use of uplevel was unsafe"
+    puts "consider using upvar instead"
+}
+
+proc real_uplevel_annotated {} {
+    uplevel 1 $body
+}
+'''
+
+
+class TestStringAwareMetrics:
+    def test_cyclomatic_ignores_string_keywords(self):
+        symbols = parse_file(STRING_AWARE_METRICS, "metrics.tcl", "tcl")
+        sym = [s for s in symbols if s.name == "cyclo_with_string_keyword"][0]
+        # 1 (base) + 1 (the real if) = 2. The `while`/`foreach`/`for`/`switch`
+        # tokens are inside "..." strings and must not contribute.
+        assert sym.cyclomatic == 2
+
+    def test_nesting_ignores_string_braces(self):
+        symbols = parse_file(STRING_AWARE_METRICS, "metrics.tcl", "tcl")
+        sym = [s for s in symbols if s.name == "nesting_with_string_braces"][0]
+        # Real depth: proc-body brace + if-body brace = 2.
+        # String "data: {a {b}}" has 2 fake `{` that must not raise depth.
+        assert sym.max_nesting == 2
+
+    def test_annotation_ignores_string_keywords(self):
+        symbols = parse_file(STRING_AWARE_METRICS, "metrics.tcl", "tcl")
+        sym = [s for s in symbols if s.name == "annotations_in_strings"][0]
+        assert "uplevel" not in sym.decorators
+        assert "upvar" not in sym.decorators
+
+    def test_real_uplevel_still_annotated(self):
+        symbols = parse_file(STRING_AWARE_METRICS, "metrics.tcl", "tcl")
+        sym = [s for s in symbols if s.name == "real_uplevel_annotated"][0]
+        assert "uplevel" in sym.decorators
+
+
+# ---------------------------------------------------------------------------
+# Tests: switch / try precision — pattern/body pairs and on/finally clauses
+# decoded by position so pattern literals and errcode lists don't pollute
+# the callee set.
+# ---------------------------------------------------------------------------
+
+SWITCH_TRY_FIXTURES = '''\
+proc switch_inline_pairs {} {
+    switch -exact $cmd \\
+        foo  {fooBody arg} \\
+        bar  {barBody arg} \\
+        biff -                  \\
+        baz  {bazBody arg}      \\
+        default {defaultBody}
+}
+
+proc switch_block_form {} {
+    switch -glob $name {
+        a*       {aBody}
+        {[bc]*}  {bcBody}
+        default  {fallbackBody}
+    }
+}
+
+proc try_with_handlers {} {
+    try {
+        riskyOp $arg
+    } on error {TCL ERROR DICT MISSING} {
+        recoverFromMissing
+    } trap {TCL OPERATION CANCEL} {msg opts} {
+        recoverFromCancel
+    } finally {
+        cleanupAlways
+    }
+}
+'''
+
+
+class TestSwitchTryPrecision:
+    def test_switch_inline_pair_bodies_captured(self):
+        symbols = parse_file(SWITCH_TRY_FIXTURES, "switchtry.tcl", "tcl")
+        sym = [s for s in symbols if s.name == "switch_inline_pairs"][0]
+        assert "fooBody" in sym.call_references
+        assert "barBody" in sym.call_references
+        assert "bazBody" in sym.call_references
+        assert "defaultBody" in sym.call_references
+        # Pattern literals (foo/bar/biff/baz) must not be captured.
+        assert "foo" not in sym.call_references
+        assert "bar" not in sym.call_references
+        assert "biff" not in sym.call_references
+        assert "baz" not in sym.call_references
+
+    def test_switch_block_form_bodies_captured(self):
+        symbols = parse_file(SWITCH_TRY_FIXTURES, "switchtry.tcl", "tcl")
+        sym = [s for s in symbols if s.name == "switch_block_form"][0]
+        assert "aBody" in sym.call_references
+        assert "bcBody" in sym.call_references
+        assert "fallbackBody" in sym.call_references
+        assert "default" not in sym.call_references
+
+    def test_try_main_body_handler_finally_all_recursed(self):
+        symbols = parse_file(SWITCH_TRY_FIXTURES, "switchtry.tcl", "tcl")
+        sym = [s for s in symbols if s.name == "try_with_handlers"][0]
+        assert "riskyOp" in sym.call_references
+        assert "recoverFromMissing" in sym.call_references
+        assert "recoverFromCancel" in sym.call_references
+        assert "cleanupAlways" in sym.call_references
+        # errcode list literals (TCL/ERROR/DICT/MISSING/etc.) must NOT
+        # surface as callees.
+        assert "TCL" not in sym.call_references
+        assert "ERROR" not in sym.call_references
+        assert "DICT" not in sym.call_references
+        assert "MISSING" not in sym.call_references
+        assert "OPERATION" not in sym.call_references
+        assert "CANCEL" not in sym.call_references
