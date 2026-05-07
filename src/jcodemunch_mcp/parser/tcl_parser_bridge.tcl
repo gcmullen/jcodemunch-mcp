@@ -1131,8 +1131,13 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
             }
 
         } elseif {$kw eq "constructor"} {
-            # Custom DSL: constructor name params body (4 args after kw)
-            # TclOO/iTcl: constructor params body      (3 args after kw)
+            # Custom DSL:    constructor name params body       (4 args after kw)
+            # iTcl 3-arg:    constructor args init body          (3 args after kw)
+            # TclOO / iTcl:  constructor args body               (2 args after kw)
+            # The init slot in the iTcl 3-arg form is the args passed to the
+            # base-class constructor; the actual constructor code lives in the
+            # body slot. The previous code mis-identified the init slot as the
+            # body, dropping callees for every 3-arg-form constructor.
             set prefix "constructor"
             if {$access ne ""} { set prefix "$access constructor" }
             if {[llength $parts] >= 5} {
@@ -1141,6 +1146,15 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
                 set con_body [lindex $parts 3]
                 emit_symbol $con_name "${scope}::${con_name}" "method" \
                     "$prefix $con_name \{$args_str\}" "" \
+                    $abs_start $abs_end $line_offsets $char_byte_map $scope \
+                    [count_cyclomatic $con_body] [count_max_nesting $con_body] \
+                    [count_params $args_str] [extract_calls $con_body] \
+                    [detect_annotations $con_body] [list "constructor"]
+            } elseif {[llength $parts] == 4} {
+                set args_str [lindex $parts 1]
+                set con_body [lindex $parts 3]
+                emit_symbol "constructor" "${scope}::constructor" "method" \
+                    "$prefix \{$args_str\}" "" \
                     $abs_start $abs_end $line_offsets $char_byte_map $scope \
                     [count_cyclomatic $con_body] [count_max_nesting $con_body] \
                     [count_params $args_str] [extract_calls $con_body] \
