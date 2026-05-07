@@ -590,6 +590,31 @@ proc _extract_collect {body skip} {
             continue
         }
 
+        # foreach var list body — only the last arg is the body. Skipping
+        # the intermediate var/list args avoids capturing list-literal
+        # elements (e.g. foreach x {a b c} {...}) as false-positive callees.
+        if {$first eq "foreach" && [llength $words] >= 4} {
+            set body_arg [lindex $words end]
+            if {[string length $body_arg] >= 3} {
+                foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+            }
+            continue
+        }
+
+        # if cond body ?elseif cond body? ... ?else body?. Recurse on every
+        # arg except the literal then/else/elseif keywords. Catches single-
+        # command bodies like `if {$x} {doIt}` that the lone-token guard
+        # below would otherwise skip.
+        if {$first eq "if" && [llength $words] >= 3} {
+            for {set j 1} {$j < [llength $words]} {incr j} {
+                set w [lindex $words $j]
+                if {$w in {then else elseif}} continue
+                if {[string length $w] < 2} continue
+                foreach c [_extract_collect $w $skip] { lappend out $c }
+            }
+            continue
+        }
+
         set is_body_cmd [expr {$first in $body_cmds}]
 
         # Recurse into argument words. Always recurse when the outer
