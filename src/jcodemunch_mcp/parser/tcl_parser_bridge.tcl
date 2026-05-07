@@ -471,13 +471,19 @@ proc count_params {args_str} {
 }
 
 # ---------------------------------------------------------------------------
-# Call reference extraction
+# Call reference extraction (TCL-native, lexer-aware)
 # ---------------------------------------------------------------------------
+#
+# Splits a body into commands using split_commands, then walks each command
+# as a TCL list. List semantics (lrange / lindex) handle string and brace
+# nesting natively, so words inside "..." string literals are not mistaken
+# for code, and data literals like the second arg of `set L X Y Z` are not
+# recursed into. Argument words that look like code blocks are recursed
+# into; bracketed command substitutions are walked separately so calls
+# inside string-quoted args (e.g. puts "got ARG") are still captured.
+# Backslash escapes are honored as 2-char units when scanning for brackets.
 
-# Extract called proc/command names from a body.
 proc extract_calls {body} {
-    set calls {}
-    set seen [dict create]
     set skip {
         proc namespace set if else elseif while for foreach switch
         return break continue catch try throw finally
@@ -490,56 +496,130 @@ proc extract_calls {body} {
         eq ne lt gt le ge in ni
         and or not true false
     }
+    return [_extract_dedup [_extract_collect $body $skip]]
+}
 
-    # Pattern: namespace-qualified calls like ::foo::bar or foo::bar
-    foreach {match sub} [regexp -all -inline {(?:^|[\s\[;])(:?:[\w:]+)} $body] {
-        set call [string trim $sub]
-        if {$call ne "" && ![dict exists $seen $call]} {
-            dict set seen $call 1
-            lappend calls $call
+proc _extract_dedup {items} {
+    set seen [dict create]
+    set out {}
+    foreach x $items {
+        if {$x ne "" && ![dict exists $seen $x]} {
+            dict set seen $x 1
+            lappend out $x
         }
     }
+    return $out
+}
 
-    # Pattern: simple command calls at start of line or after [ or ;
-    foreach {match sub} [regexp -all -inline {(?:^|[\[;\n])\s*([a-zA-Z_][\w]*)} $body] {
-        set call [string trim $sub]
-        if {$call in $skip} { continue }
-        if {$call ne "" && ![dict exists $seen $call]} {
-            dict set seen $call 1
-            lappend calls $call
+proc _extract_collect {body skip} {
+    # Commands whose argument words are code bodies (or whose args concat
+    # into one command, in the case of eval / uplevel). For any of these
+    # we recurse into argument words even if the heuristic would otherwise
+    # skip them as data-looking literals.
+    set body_cmds {if elseif else while for foreach catch try after switch}
+    set concat_cmds {eval uplevel}
+
+    set out {}
+    if {[catch {set commands [split_commands $body]}]} { return $out }
+    foreach cmd_info $commands {
+        set cmd_text [lindex $cmd_info 0]
+        set trimmed [string trimleft $cmd_text]
+        if {[string index $trimmed 0] eq "#"} continue
+
+        # Bracket substitutions live inside string-quoted args too — walk
+        # them at the raw-text level so we do not miss them.
+        foreach c [_extract_brackets $cmd_text $skip] { lappend out $c }
+
+        if {[catch {set words [lrange $cmd_text 0 end]}]} continue
+        if {[llength $words] == 0} continue
+
+        set first [lindex $words 0]
+
+        # Pattern A: bare or namespace-qualified command at command position
+        if {[regexp {^(?:::)?[a-zA-Z_]\w*(?:::\w+)*$} $first]} {
+            if {$first ni $skip} { lappend out $first }
+        } elseif {[regexp {^\$\w+(?:\([^)]*\))?$} $first] && [llength $words] >= 2} {
+            # Pattern B: dispatch via dollar-var or array-form dollar-var
+            set method [lindex $words 1]
+            if {[regexp {^[a-zA-Z_]\w*$} $method] && $method ni $skip} {
+                lappend out $method
+            }
+        }
+
+        # eval / uplevel concatenate their args and re-evaluate as one
+        # command. Join the rest of the words and recurse on the result so
+        # the embedded dispatch surfaces.
+        if {$first in $concat_cmds && [llength $words] >= 2} {
+            set joined [join [lrange $words 1 end] " "]
+            foreach c [_extract_collect $joined $skip] { lappend out $c }
+            continue
+        }
+
+        set is_body_cmd [expr {$first in $body_cmds}]
+
+        # Recurse into argument words. Always recurse when the outer
+        # command is a body-taking control structure; otherwise only when
+        # the word looks like code by content (newline / bracket / semicolon).
+        # Note: do NOT use a starts-with-dollar rule. After lrange unwraps
+        # a "..." quoted argument, the string content can begin with
+        # $var ..., which falsely looks like a dispatch (see the
+        # addInput "$x foo" case where foo would otherwise be captured).
+        for {set j 1} {$j < [llength $words]} {incr j} {
+            set w [lindex $words $j]
+            if {[string length $w] < 3} continue
+            set recurse 0
+            if {$is_body_cmd} { set recurse 1 }
+            if {[regexp {[\n\[;]} $w]} { set recurse 1 }
+            if {!$recurse} continue
+            # Skip bracket fragments. lrange splits [...] substitutions on
+            # whitespace because the bracket chars are not list-grouping;
+            # the bracket walker already handled them at the parent level,
+            # and recursing on a fragment treats data tokens as commands.
+            set first_ch [string index $w 0]
+            set last_ch  [string index $w end]
+            if {$first_ch eq "\[" || $last_ch eq "\]"} continue
+            # When forcing recursion via is_body_cmd, also skip single-
+            # token words (no internal whitespace). Bodies are typically
+            # multi-token; lone tokens are values like a list literal item.
+            if {$is_body_cmd && ![regexp {\s} $w]} continue
+            foreach c [_extract_collect $w $skip] { lappend out $c }
+        }
+
+        # Tk-callback idiom: -option "ARG". The string is one list word so
+        # the recursion above cannot see it; pattern-match it here.
+        foreach {match grp} [regexp -all -inline -- \
+                {-[a-zA-Z][\w-]*\s+"\s*\$\w+(?:\([^)]*\))?\s+([a-zA-Z_][\w]*)} $cmd_text] {
+            set call [string trim $grp]
+            if {$call ne "" && $call ni $skip} { lappend out $call }
         }
     }
+    return $out
+}
 
-    # Pattern: iTcl / TclOO method dispatch — `$var method args` appearing as
-    # a statement (line start, after `[`, or after `;`). Also accepts the
-    # iTk array form `$var(key) method`. Critical for bluice where the
-    # dominant call form is `$self methodName` (or `$itk_option(-X) method`),
-    # rather than bare `methodName`.
-    foreach {match sub} [regexp -all -inline {(?:^|[\[;\n])\s*\$\w+(?:\([^)]*\))?\s+([a-zA-Z_][\w]*)} $body] {
-        set call [string trim $sub]
-        if {$call in $skip} { continue }
-        if {$call ne "" && ![dict exists $seen $call]} {
-            dict set seen $call 1
-            lappend calls $call
+proc _extract_brackets {text skip} {
+    set out {}
+    set len [string length $text]
+    set i 0
+    while {$i < $len} {
+        set c [string index $text $i]
+        if {$c eq "\\" && $i + 1 < $len} { incr i 2; continue }
+        if {$c ne "\["} { incr i; continue }
+        set depth 1
+        set start [expr {$i + 1}]
+        incr i
+        while {$i < $len && $depth > 0} {
+            set c [string index $text $i]
+            if {$c eq "\\" && $i + 1 < $len} { incr i 2; continue }
+            if {$c eq "\["} { incr depth }
+            if {$c eq "\]"} { incr depth -1 }
+            incr i
+        }
+        if {$depth == 0} {
+            set sub [string range $text $start [expr {$i - 2}]]
+            foreach c [_extract_collect $sub $skip] { lappend out $c }
         }
     }
-
-    # Pattern: Tk-callback idiom — `-option "$var method …"` or
-    # `-option "$var(key) method …"`. The leading `-word` requirement
-    # scopes this to option-value strings (Tk widget callbacks, iwidgets
-    # -command / -onClick / -yscrollcommand / etc.) and avoids catching
-    # arbitrary interpolated strings like "user $u name".
-    foreach {match sub} [regexp -all -inline -- \
-            {-[a-zA-Z][\w-]*\s+"\s*\$\w+(?:\([^)]*\))?\s+([a-zA-Z_][\w]*)} $body] {
-        set call [string trim $sub]
-        if {$call in $skip} { continue }
-        if {$call ne "" && ![dict exists $seen $call]} {
-            dict set seen $call 1
-            lappend calls $call
-        }
-    }
-
-    return $calls
+    return $out
 }
 
 # ---------------------------------------------------------------------------
