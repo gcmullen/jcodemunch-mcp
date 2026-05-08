@@ -1,0 +1,106 @@
+{
+  "files": [
+    {
+      "file": "/home/giles/bluice/BluIceWidgets/BeamlineAuthView.tcl",
+      "symbols": [
+        {"qualified_name": "BeamlineAuthView::handleAll", "line": 23, "expected_callees": []},
+        {"qualified_name": "BeamlineAuthView::handleNeedRefreshEvent", "line": 27, "expected_callees": []},
+        {"qualified_name": "BeamlineAuthView::getBeamlineId", "line": 37, "expected_callees": []},
+        {"qualified_name": "BeamlineAuthView::constructor", "line": 47, "expected_callees": ["BeamlineAuthApi::getObject", "DCS::DeviceFactory::getObject", "iwidgets::labeledframe", "childsite", "iwidgets::scrolledlistbox", "button", "BeamlineAuthUserView", "label", "grid", "hide", "register", "updateUserList"]},
+        {"qualified_name": "BeamlineAuthView::destructor", "line": 116, "expected_callees": ["unregister"]},
+        {"qualified_name": "BeamlineAuthView::newUser", "line": 121, "expected_callees": ["setUser"]},
+        {"qualified_name": "BeamlineAuthView::handleSelection", "line": 128, "expected_callees": ["show", "getcurselection", "newUser", "listUser", "setUser", "configure"]},
+        {"qualified_name": "BeamlineAuthView::updateUserList", "line": 148, "expected_callees": ["getUserName", "listUsers", "clear", "insert", "component", "get", "hide", "show", "listUser", "setUser", "configure"]},
+        {"qualified_name": "BeamlineAuthView::handleSessionIdChange", "line": 185, "expected_callees": ["configure", "newUser", "show"]},
+        {"qualified_name": "BeamlineAuthView::setErrorMessage", "line": 200, "expected_callees": ["configure"]},
+        {"qualified_name": "BeamlineAuthUserView::getUserName", "line": 212, "expected_callees": ["get"]},
+        {"qualified_name": "BeamlineAuthUserView::handleAll", "line": 216, "expected_callees": []},
+        {"qualified_name": "BeamlineAuthUserView::constructor", "line": 232, "expected_callees": ["getBeamlineId", "DCS::DeviceFactory::getObject", "createVirtualString", "createAttributeFromKey", "iwidgets::labeledframe", "childsite", "DCS::Entry", "DCS::Checkbutton", "::DCS::Button", "iwidgets::scrolledlistbox", "grid", "::DCS::ComponentGate", "addInput", "configure", "bind", "component", "applyChanges", "cancelChanges", "deleteUser"]},
+        {"qualified_name": "BeamlineAuthUserView::removeBeamline", "line": 406, "expected_callees": ["removeBeamline", "getcursorselection"]},
+        {"qualified_name": "BeamlineAuthUserView::hide", "line": 410, "expected_callees": ["childsite", "configure", "grid"]},
+        {"qualified_name": "BeamlineAuthUserView::show", "line": 415, "expected_callees": ["childsite", "grid"]},
+        {"qualified_name": "BeamlineAuthUserView::setUser", "line": 420, "expected_callees": ["updateReference", "writeUserJson", "setValue", "configure", "removeItemFromList", "grid", "clear", "insert"]},
+        {"qualified_name": "BeamlineAuthUserView::applyChanges", "line": 462, "expected_callees": ["setErrorMessage", "get", "removeItemFromList", "updateReference", "saveUser"]},
+        {"qualified_name": "BeamlineAuthUserView::cancelChanges", "line": 498, "expected_callees": ["updateFromReference"]},
+        {"qualified_name": "BeamlineAuthUserView::deleteUser", "line": 506, "expected_callees": ["setErrorMessage", "get", "deleteUser"]},
+        {"qualified_name": "BeamlineAuthUserView::updateReference", "line": 513, "expected_callees": ["setContents"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/DcsWidgets/BeamlineChooser.tcl",
+      "symbols": [
+        {"qualified_name": "DCS::BeamlineChooser::handleOk", "line": 51, "expected_callees": ["cget", "pack"]},
+        {"qualified_name": "DCS::BeamlineChooser::handleCancel", "line": 52, "expected_callees": ["pack"]},
+        {"qualified_name": "DCS::BeamlineChooser::wait", "line": 53, "expected_callees": ["tkwait"]},
+        {"qualified_name": "DCS::BeamlineChooser::isOk", "line": 54, "expected_callees": []},
+        {"qualified_name": "DCS::BeamlineChooser::getBeamline", "line": 55, "expected_callees": []},
+        {"qualified_name": "DCS::BeamlineChooser::handleDoubleClick", "line": 56, "expected_callees": ["handleListSelection", "handleOk"]},
+        {"qualified_name": "DCS::BeamlineChooser::handleListSelection", "line": 58, "expected_callees": ["curselection", "config", "get"]},
+        {"qualified_name": "DCS::BeamlineChooser::constructor", "line": 65, "expected_callees": ["DCS::TitledFrame", "childsite", "pack", "label", "::iwidgets::scrolledlistbox", "frame", "button", "grid", "insert", "config", "::itcl::code", "sort", "selection", "handleListSelection", "handleOk", "handleCancel"]},
+        {"qualified_name": "DCS::BeamlineChooser::destructor", "line": 130, "expected_callees": []}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/DcsWidgets/MessageBoard.tcl",
+      "symbols": [
+        {"qualified_name": "DCS::MessageBoard::unregisterDeviceObjs", "line": 81, "expected_callees": ["isa", "unRegisterForAllEvents", "unregister"]},
+        {"qualified_name": "DCS::MessageBoard::unregisterControllerObjs", "line": 82, "expected_callees": ["unregister"]},
+        {"qualified_name": "DCS::MessageBoard::addDeviceObjs", "line": 84, "expected_callees": ["isa", "registerForAllEvents", "register", "cget", "getObjectName"]},
+        {"qualified_name": "DCS::MessageBoard::addOperations", "line": 85, "expected_callees": ["createOperation", "addDeviceObjs"]},
+        {"qualified_name": "DCS::MessageBoard::addStrings", "line": 86, "expected_callees": ["createString", "addDeviceObjs"]},
+        {"qualified_name": "DCS::MessageBoard::clear", "line": 88, "expected_callees": ["config"]},
+        {"qualified_name": "DCS::MessageBoard::unregisterAll", "line": 92, "expected_callees": ["unregisterDeviceObjs", "unregisterControllerObjs"]},
+        {"qualified_name": "DCS::MessageBoard::handleOperationEvent", "line": 94, "expected_callees": ["configure", "config"]},
+        {"qualified_name": "DCS::MessageBoard::handleStringEvent", "line": 95, "expected_callees": ["config"]},
+        {"qualified_name": "DCS::MessageBoard::handleShutterEvent", "line": 96, "expected_callees": ["cget", "config"]},
+        {"qualified_name": "DCS::MessageBoard::handleMotorEvent", "line": 97, "expected_callees": ["cget", "config"]},
+        {"qualified_name": "DCS::MessageBoard::handleControllerEvent", "line": 98, "expected_callees": ["cget", "config"]},
+        {"qualified_name": "DCS::MessageBoard::handleClientStateEvent", "line": 99, "expected_callees": ["config", "unregisterControllerObjs", "cget", "getObjectName", "register"]},
+        {"qualified_name": "DCS::MessageBoard::constructor", "line": 102, "expected_callees": ["DCS::DeviceFactory::getObject", "frame", "label", "pack", "register"]},
+        {"qualified_name": "DCS::MessageBoard::destructor", "line": 124, "expected_callees": ["unregisterAll", "unregister"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dhs-tcl/main/scripts/base/controller/ControllerBase.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::ControllerBase::constructor", "line": 29, "expected_callees": []},
+        {"qualified_name": "Dhs::ControllerBase::isInitialized", "line": 32, "expected_callees": []},
+        {"qualified_name": "Dhs::ControllerBase::afterPropertiesSet", "line": 37, "expected_callees": ["createDeviceNameToObjectMap", "assertPropertyNotEmpty", "assertPropertyIsaClass", "addListener"]},
+        {"qualified_name": "Dhs::ControllerBase::register_operation", "line": 46, "expected_callees": ["register"]},
+        {"qualified_name": "Dhs::ControllerBase::register_motor", "line": 50, "expected_callees": ["register"]},
+        {"qualified_name": "Dhs::ControllerBase::register_encoder", "line": 54, "expected_callees": ["register"]},
+        {"qualified_name": "Dhs::ControllerBase::setEncoder", "line": 58, "expected_callees": ["setPosition"]},
+        {"qualified_name": "Dhs::ControllerBase::getEncoder", "line": 62, "expected_callees": ["getPosition"]},
+        {"qualified_name": "Dhs::ControllerBase::register_shutter", "line": 66, "expected_callees": ["register"]},
+        {"qualified_name": "Dhs::ControllerBase::register_dcssString", "line": 70, "expected_callees": ["register"]},
+        {"qualified_name": "Dhs::ControllerBase::correctMotorPosition", "line": 74, "expected_callees": ["correctPosition"]},
+        {"qualified_name": "Dhs::ControllerBase::configure_motor", "line": 78, "expected_callees": ["isa", "configure_motor"]},
+        {"qualified_name": "Dhs::ControllerBase::motor_move", "line": 83, "expected_callees": ["motor_move"]},
+        {"qualified_name": "Dhs::ControllerBase::read_ion_chamber", "line": 87, "expected_callees": ["read"]},
+        {"qualified_name": "Dhs::ControllerBase::buildOperation", "line": 91, "expected_callees": ["buildOperation"]},
+        {"qualified_name": "Dhs::ControllerBase::setShutterState", "line": 97, "expected_callees": ["setState"]},
+        {"qualified_name": "Dhs::ControllerBase::setDcssString", "line": 102, "expected_callees": ["dcssSetValue"]},
+        {"qualified_name": "Dhs::ControllerBase::abort_all", "line": 107, "expected_callees": ["cget", "abort_all"]},
+        {"qualified_name": "Dhs::ControllerBase::createDeviceNameToObjectMap", "line": 120, "expected_callees": ["cget"]},
+        {"qualified_name": "Dhs::ControllerBase::register_ion_chamber", "line": 127, "expected_callees": ["register"]},
+        {"qualified_name": "Dhs::ControllerBase::applyDcssToController", "line": 131, "expected_callees": ["configure", "setController"]},
+        {"qualified_name": "Dhs::ControllerBase::tick", "line": 139, "expected_callees": ["initializeDevices", "getConfigDone", "cget", "updateMove"]},
+        {"qualified_name": "Dhs::ControllerBase::initializeDevices", "line": 163, "expected_callees": ["getInitialized", "getInitializing", "initDevice"]},
+        {"qualified_name": "Dhs::ControllerBase::lookupDeviceByName", "line": 179, "expected_callees": []},
+        {"qualified_name": "Dhs::ControllerBase::log_info", "line": 183, "expected_callees": ["log_info"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/DcsWidgets/Cif.tcl",
+      "symbols": [
+        {"qualified_name": "DCS::CifFile::constructor", "line": 34, "expected_callees": []},
+        {"qualified_name": "DCS::CifFile::setDefaults", "line": 37, "expected_callees": []},
+        {"qualified_name": "DCS::CifFile::read", "line": 38, "expected_callees": ["getNextLine"]},
+        {"qualified_name": "DCS::CifFile::getValue", "line": 40, "expected_callees": []},
+        {"qualified_name": "DCS::CifFile::getValueCount", "line": 41, "expected_callees": []},
+        {"qualified_name": "DCS::CifFile::getBlockCount", "line": 42, "expected_callees": []},
+        {"qualified_name": "DCS::CifFile::getNextLine", "line": 45, "expected_callees": []}
+      ]
+    }
+  ]
+}

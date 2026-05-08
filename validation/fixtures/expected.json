@@ -1,0 +1,88 @@
+{
+  "description": "Ground truth for TCL parser edge-case fixtures. Each file has a minimum expected symbol count per kind. Diagnostic probes (XOTcl, Snit, TclOO) may legitimately return 0 if the parser doesn't support them, but we record whether it does.",
+  "fixtures": {
+    "01_hex_in_expr.tcl": {
+      "tests": "hex literals inside braced expr",
+      "min_procs": 2,
+      "expected_proc_names": ["maskByte", "extractBits"],
+      "min_classes": 0,
+      "min_methods": 0,
+      "diagnostic": false
+    },
+    "02_nested_namespace.tcl": {
+      "tests": "classes + procs inside namespace eval",
+      "min_procs": 3,
+      "expected_proc_names": ["utility1", "utility2", "utility3"],
+      "min_classes": 2,
+      "expected_class_names": ["FooWidget", "BarWidget"],
+      "min_methods": 4,
+      "expected_method_names": ["doIt", "doItAgain", "render", "refresh"],
+      "diagnostic": false
+    },
+    "03_continued_proc.tcl": {
+      "tests": "line-continuation in proc header",
+      "min_procs": 2,
+      "expected_proc_names": ["withBackslash", "normalProc"],
+      "min_classes": 0,
+      "min_methods": 0,
+      "diagnostic": false
+    },
+    "04_inline_braces.tcl": {
+      "tests": "braces inside strings inside method bodies",
+      "min_procs": 0,
+      "min_classes": 1,
+      "expected_class_names": ["Tricky"],
+      "min_methods": 2,
+      "expected_method_names": ["render", "another"],
+      "diagnostic": false
+    },
+    "05_itcl_configbody.tcl": {
+      "tests": "itcl::configbody (out-of-line option handlers)",
+      "min_procs": 0,
+      "min_classes": 1,
+      "expected_class_names": ["ConfigurableWidget"],
+      "min_methods": 1,
+      "expected_method_names": ["draw"],
+      "bonus_configbody_count": 2,
+      "diagnostic": false
+    },
+    "06_multi_inherit.tcl": {
+      "tests": "multiple inheritance via `inherit A B C`",
+      "min_procs": 0,
+      "min_classes": 1,
+      "expected_class_names": ["Composite"],
+      "min_methods": 1,
+      "expected_method_names": ["sync"],
+      "expected_parent_count": 3,
+      "expected_parents": ["::itk::Widget", "DCS::Component", "DCS::Observable"],
+      "diagnostic": false
+    },
+    "07_xotcl.tcl": {
+      "tests": "XOTcl object system",
+      "min_procs": 0,
+      "min_classes": 0,
+      "min_methods": 0,
+      "bonus_classes": 2,
+      "bonus_methods": 3,
+      "diagnostic": true
+    },
+    "08_snit.tcl": {
+      "tests": "Snit types",
+      "min_procs": 0,
+      "min_classes": 0,
+      "min_methods": 0,
+      "bonus_types": 1,
+      "bonus_methods": 2,
+      "diagnostic": true
+    },
+    "09_tcloo.tcl": {
+      "tests": "Tcl 8.6 oo::class",
+      "min_procs": 0,
+      "min_classes": 0,
+      "min_methods": 0,
+      "bonus_classes": 1,
+      "bonus_methods": 2,
+      "diagnostic": true
+    }
+  }
+}

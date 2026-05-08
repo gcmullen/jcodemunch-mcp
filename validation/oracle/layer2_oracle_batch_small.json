@@ -1,0 +1,136 @@
+{
+  "files": [
+    {
+      "file": "/home/giles/bluice/dhs-tcl/main/scripts/base/operations/AsyncExec.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::AsyncExec::asyncExec", "line": 10, "expected_callees": []},
+        {"qualified_name": "Dhs::AsyncExec::isDone", "line": 17, "expected_callees": []},
+        {"qualified_name": "Dhs::AsyncExec::getResult", "line": 21, "expected_callees": []}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dcs-lib-tcl/main/scripts/AsyncGets.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::AsyncGets::constructor", "line": 14, "expected_callees": ["fileevent"]},
+        {"qualified_name": "Dhs::AsyncGets::asyncGets", "line": 23, "expected_callees": []}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/BluIceWidgets/BarcodeView.tcl",
+      "symbols": [
+        {"qualified_name": "BarcodeView::onBarcodeClick", "line": 8, "expected_callees": []},
+        {"qualified_name": "BarcodeView::constructor", "line": 12, "expected_callees": ["DCS::CassetteBarcodeView", "DCS::CassetteOwnerView", "onBarcodeClick", "pack"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dcs-lib-tcl/main/scripts/Clock.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::Clock::constructor", "line": 16, "expected_callees": []},
+        {"qualified_name": "Dhs::Clock::monitor", "line": 19, "expected_callees": ["tick"]},
+        {"qualified_name": "Dhs::Clock::afterPropertiesSet", "line": 33, "expected_callees": ["monitor"]},
+        {"qualified_name": "Dhs::Clock::addListener", "line": 38, "expected_callees": []},
+        {"qualified_name": "Dhs::ClockLogger::tick", "line": 49, "expected_callees": []}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dcs-lib-tcl/main/scripts/DcssHardwareServer.tcl",
+      "symbols": [
+        {"qualified_name": "DcssProtocol::DcssHardwareServer::afterPropertiesSet", "line": 22, "expected_callees": ["assertPropertyNotEmpty", "listen"]},
+        {"qualified_name": "DcssProtocol::DcssHardwareServer::listen", "line": 34, "expected_callees": ["socket", "accept", "listen"]},
+        {"qualified_name": "DcssProtocol::DcssHardwareServer::isListening", "line": 47, "expected_callees": []},
+        {"qualified_name": "DcssProtocol::DcssHardwareServer::accept", "line": 52, "expected_callees": ["DcssProtocol::DcssHardwareServerConnection", "onHardwareName", "onShutdown"]},
+        {"qualified_name": "DcssProtocol::DcssHardwareServer::onHardwareName", "line": 58, "expected_callees": ["cget", "breakConnection", "configure"]},
+        {"qualified_name": "DcssProtocol::DcssHardwareServer::onShutdown", "line": 79, "expected_callees": ["cget", "delete"]},
+        {"qualified_name": "DcssProtocol::DcssHardwareServer::destructor", "line": 87, "expected_callees": ["onShutdown"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dcss/scripts/devices/DEG_HORZ.tcl",
+      "symbols": [
+        {"qualified_name": "PREFIX_horz_initialize", "line": 4, "expected_callees": ["set_children", "set_siblings"]},
+        {"qualified_name": "PREFIX_horz_move", "line": 12, "expected_callees": ["move", "wait_for_devices"]},
+        {"qualified_name": "PREFIX_horz_set", "line": 26, "expected_callees": []},
+        {"qualified_name": "PREFIX_horz_update", "line": 37, "expected_callees": ["PREFIX_horz_calculate"]},
+        {"qualified_name": "PREFIX_horz_calculate", "line": 50, "expected_callees": []}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dhs-tcl/main/scripts/base/operations/DetectorStop.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::DetectorStop::constructor", "line": 6, "expected_callees": []},
+        {"qualified_name": "Dhs::DetectorStop::startOperation", "line": 9, "expected_callees": ["detectorStop"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dhs-tcl/main/scripts/base/devices/DeviceBase.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::DeviceBase::getConfigDone", "line": 14, "expected_callees": []},
+        {"qualified_name": "Dhs::DeviceBase::configDone", "line": 15, "expected_callees": []},
+        {"qualified_name": "Dhs::DeviceBase::register", "line": 19, "expected_callees": []},
+        {"qualified_name": "Dhs::DeviceBase::afterPropertiesSet", "line": 25, "expected_callees": ["addListener"]},
+        {"qualified_name": "Dhs::DeviceBase::abort_all", "line": 36, "expected_callees": []},
+        {"qualified_name": "Dhs::DeviceBase::setController", "line": 40, "expected_callees": []},
+        {"qualified_name": "Dhs::DeviceBase::getController", "line": 44, "expected_callees": []}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dhs-tcl/main/scripts/base/devices/IonChamberBase.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::IonChamberBase::register", "line": 6, "expected_callees": []}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dcs-lib-tcl/main/scripts/Logger.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::Logger::afterPropertiesSet", "line": 17, "expected_callees": []},
+        {"qualified_name": "Dhs::Logger::init", "line": 29, "expected_callees": ["initPutsLogger"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dcss/scripts/devices/MFX_MOTOR.tcl",
+      "symbols": [
+        {"qualified_name": "getMfxMotorMapConst", "line": 1, "expected_callees": []},
+        {"qualified_name": "setMfxMotorMapConst", "line": 18, "expected_callees": []},
+        {"qualified_name": "PREFIX_initialize", "line": 24, "expected_callees": ["log_severe", "set_children"]},
+        {"qualified_name": "PREFIX_move", "line": 42, "expected_callees": ["PREFIX_calculateMPos", "move", "wait_for_devices"]},
+        {"qualified_name": "PREFIX_set", "line": 52, "expected_callees": ["getMfxMotorMapConst", "setMfxMotorMapConst", "update_motor_position"]},
+        {"qualified_name": "PREFIX_update", "line": 65, "expected_callees": ["PREFIX_calculate"]},
+        {"qualified_name": "PREFIX_calculateMPos", "line": 72, "expected_callees": ["getMfxMotorMapConst"]},
+        {"qualified_name": "PREFIX_calculate", "line": 81, "expected_callees": ["getMfxMotorMapConst", "log_severe"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/dhs-tcl/main/scripts/base/devices/ShutterBase.tcl",
+      "symbols": [
+        {"qualified_name": "Dhs::ShutterBase::register", "line": 8, "expected_callees": []},
+        {"qualified_name": "Dhs::ShutterBase::setState", "line": 13, "expected_callees": ["updateShutterState"]},
+        {"qualified_name": "Dhs::ShutterBase::afterPropertiesSet", "line": 19, "expected_callees": ["::Dhs::DeviceBase::afterPropertiesSet"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/DcsWidgets/ComponentGateExtension.tcl",
+      "symbols": [
+        {"qualified_name": "DCS::ComponentGateExtension::registerComponent", "line": 9, "expected_callees": []},
+        {"qualified_name": "DCS::ComponentGateExtension::unregisterComponent", "line": 10, "expected_callees": []},
+        {"qualified_name": "DCS::ComponentGateExtension::updateBubble", "line": 11, "expected_callees": ["wm", "getOutputMessage", "getPermissionMessage", "cget", "DynamicHelp::register"]},
+        {"qualified_name": "DCS::ComponentGateExtension::handleNewOutput", "line": 12, "expected_callees": ["configure", "updateBubble"]},
+        {"qualified_name": "DCS::ComponentGateExtension::constructor", "line": 17, "expected_callees": []},
+        {"qualified_name": "DCS::ComponentGateExtension::activeClientOnly", "line": 92, "expected_callees": ["addInput", "deleteInput"]},
+        {"qualified_name": "DCS::ComponentGateExtension::systemIdleOnly", "line": 100, "expected_callees": ["DCS::DeviceFactory::getObject", "createString", "addInput", "deleteInput"]}
+      ]
+    },
+    {
+      "file": "/home/giles/bluice/DcsWidgets/AttributeDisplay.tcl",
+      "symbols": [
+        {"qualified_name": "DCS::AttributeDisplay::handleAttributeUpdate", "line": 71, "expected_callees": []},
+        {"qualified_name": "DCS::AttributeDisplay::handleComponentStatus", "line": 72, "expected_callees": []},
+        {"qualified_name": "DCS::AttributeDisplay::unregisterLast", "line": 74, "expected_callees": ["unregister"]},
+        {"qualified_name": "DCS::AttributeDisplay::registerNew", "line": 75, "expected_callees": ["register"]},
+        {"qualified_name": "DCS::AttributeDisplay::constructor", "line": 82, "expected_callees": []},
+        {"qualified_name": "DCS::AttributeDisplay::destructor", "line": 86, "expected_callees": ["unregister"]},
+        {"qualified_name": "DCS::AttributeDisplay::attribute", "line": 97, "expected_callees": ["unregisterLast", "registerNew"]},
+        {"qualified_name": "DCS::AttributeDisplay::component", "line": 105, "expected_callees": ["unregisterLast", "registerNew"]}
+      ]
+    }
+  ]
+}
