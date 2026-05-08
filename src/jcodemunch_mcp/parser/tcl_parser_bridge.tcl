@@ -530,8 +530,130 @@ proc extract_calls {body} {
         file glob cd pwd exec pid
         eq ne lt gt le ge in ni
         and or not true false
+        itk_component itk_initialize itk_option
     }
     return [_extract_dedup [_extract_collect $body $skip]]
+}
+
+# ---------------------------------------------------------------------------
+# Unresolved-dispatch detection (per SPEC.md section 4)
+# ---------------------------------------------------------------------------
+#
+# Returns a list of {rel_line kind snippet} entries for dispatch sites that
+# exist in the body but cannot be statically resolved to a callee. The
+# rel_line is 1-indexed from the start of the body string; the caller
+# (emit_symbol) converts to an absolute file line by adding (start_line - 1).
+#
+# Categories (each maps to one `kind` string):
+#   eval_var       eval $cmd ?args?
+#   eval_brackets  eval [computed_expr] ?args?      (only when bracket content is not `list ...`)
+#   uplevel_var    uplevel ?level? $script
+#   interp_eval    interp eval $other $cmd
+#   var_command    $cmd_name ?args? where Pattern B doesn't apply
+#                  (e.g. $cmd alone; or $cmd literal_arg literal_arg)
+#   var_method     $obj $methodvar args (method name itself is a variable)
+#
+# Resolved-dispatch shapes are EXPLICITLY excluded:
+#   - eval $literal_word ...        (literal first word: bridge concats+recurses)
+#   - $obj method args              (Pattern B: method captured as call edge)
+#   - [$obj method args]            (bracket walker recurses; Pattern B applies)
+
+proc extract_unresolved {body} {
+    set out {}
+    if {[catch {set commands [split_commands $body]}]} { return $out }
+    foreach cmd_info $commands {
+        set cmd_text [lindex $cmd_info 0]
+        set cmd_start [lindex $cmd_info 1]
+        set rel_line [_offset_to_line $body $cmd_start]
+
+        set trimmed [string trimleft $cmd_text]
+        if {[string index $trimmed 0] eq "#"} continue
+
+        regsub -all -- "\\\\\n\\s*" $cmd_text " " cmd_norm
+        if {[catch {set words [lrange $cmd_norm 0 end]}]} continue
+        if {[llength $words] == 0} continue
+
+        set first [string trim [lindex $words 0]]
+
+        # eval $var ?args?
+        if {$first eq "eval" && [llength $words] >= 2} {
+            set arg [string trim [lindex $words 1]]
+            if {[regexp {^\$\w+(?:\([^)]*\))?$} $arg]} {
+                lappend out [list $rel_line "eval_var" [_truncate $cmd_text 80]]
+                continue
+            }
+            # eval [bracketed_expr] — `[...]` substitutions don't survive
+            # lrange's word boundary, so detect on the raw cmd_text.
+            # `eval [list ...]` is statically constructible (the `list`
+            # builder of literals); only mark non-`list` bracket contents.
+            if {[regexp {^\s*eval\s+\[\s*([a-zA-Z_]\w*)} $cmd_text - sub]} {
+                if {$sub ne "list"} {
+                    lappend out [list $rel_line "eval_brackets" [_truncate $cmd_text 80]]
+                    continue
+                }
+            }
+        }
+
+        # uplevel ?level? $var
+        if {$first eq "uplevel" && [llength $words] >= 2} {
+            set idx 1
+            set lev [string trim [lindex $words $idx]]
+            if {[regexp {^#?\d+$} $lev]} { incr idx }
+            if {$idx < [llength $words]} {
+                set arg [string trim [lindex $words $idx]]
+                if {[regexp {^\$\w+(?:\([^)]*\))?$} $arg]} {
+                    lappend out [list $rel_line "uplevel_var" [_truncate $cmd_text 80]]
+                    continue
+                }
+            }
+        }
+
+        # interp eval $other $cmd
+        if {$first eq "interp" && [llength $words] >= 4
+                && [string trim [lindex $words 1]] eq "eval"} {
+            set arg [string trim [lindex $words 3]]
+            if {[regexp {^\$\w+(?:\([^)]*\))?$} $arg]} {
+                lappend out [list $rel_line "interp_eval" [_truncate $cmd_text 80]]
+                continue
+            }
+        }
+
+        # $var-receiver dispatches
+        if {[regexp {^\$\w+(?:\([^)]*\))?$} $first]} {
+            if {[llength $words] == 1} {
+                # `$cmd` alone at command position — receiver IS the command.
+                lappend out [list $rel_line "var_command" [_truncate $cmd_text 80]]
+                continue
+            }
+            set second [string trim [lindex $words 1]]
+            if {[regexp {^\$} $second]} {
+                # `$obj $methodvar ...` — method name is a variable.
+                lappend out [list $rel_line "var_method" [_truncate $cmd_text 80]]
+                continue
+            }
+            # Otherwise Pattern B captures the method — resolved, do not mark.
+        }
+    }
+    return $out
+}
+
+# Count newlines in body[0..offset-1] to derive 1-indexed line within the
+# body string. Used for unresolved-dispatch snippet line attribution.
+proc _offset_to_line {body offset} {
+    if {$offset <= 0} { return 1 }
+    set sub [string range $body 0 [expr {$offset - 1}]]
+    set nl [regexp -all -- "\n" $sub]
+    return [expr {$nl + 1}]
+}
+
+# Truncate a snippet to <= max chars with an ellipsis suffix when cut.
+# Newlines and consecutive whitespace are collapsed for readability.
+proc _truncate {s max} {
+    regsub -all -- {\s+} [string trim $s] " " s
+    if {[string length $s] > $max} {
+        return "[string range $s 0 [expr {$max - 4}]]..."
+    }
+    return $s
 }
 
 proc _extract_dedup {items} {
@@ -565,7 +687,15 @@ proc _extract_collect {body skip} {
         # them at the raw-text level so we do not miss them.
         foreach c [_extract_brackets $cmd_text $skip] { lappend out $c }
 
-        if {[catch {set words [lrange $cmd_text 0 end]}]} continue
+        # Normalize TCL line continuation `\<newline>` → single space before
+        # list parsing. lrange's list grammar mishandles this sequence when
+        # the next non-whitespace char is a `"` quote (it can mistake the
+        # contents of a "..."-quoted argument for adjacent brace-grouped
+        # elements and error out with `list element in braces followed by
+        # """`). Real-world cases: `$obj method \<newline>    "..."` line-
+        # continuation idioms are extremely common in itk widget-config code.
+        regsub -all -- "\\\\\n\\s*" $cmd_text " " cmd_text_norm
+        if {[catch {set words [lrange $cmd_text_norm 0 end]}]} continue
         if {[llength $words] == 0} continue
 
         set first [lindex $words 0]
@@ -575,6 +705,18 @@ proc _extract_collect {body skip} {
             if {$first ni $skip} { lappend out $first }
         } elseif {[regexp {^\$\w+(?:\([^)]*\))?$} $first] && [llength $words] >= 2} {
             # Pattern B: dispatch via dollar-var or array-form dollar-var
+            set method [lindex $words 1]
+            if {[regexp {^[a-zA-Z_]\w*$} $method] && $method ni $skip} {
+                lappend out $method
+            }
+        }
+
+        # Pattern A2: FQN-receiver dispatch — single-segment global reference
+        # `::object method ?args?` (e.g., `::config getImageUrl 1`,
+        # `::mediator notify ev`). Multi-segment FQNs like
+        # `::DCS::Component::register` are procedure calls (already handled by
+        # Pattern A) and stay out of this branch via the no-internal-`::` rule.
+        if {[regexp {^::[a-zA-Z_]\w*$} $first] && [llength $words] >= 2} {
             set method [lindex $words 1]
             if {[regexp {^[a-zA-Z_]\w*$} $method] && $method ni $skip} {
                 lappend out $method
@@ -739,6 +881,54 @@ proc _extract_collect {body skip} {
             continue
         }
 
+        # bind ?tag? window ?<event>? script
+        # The trailing script is a Tk callback; common idiom is
+        # `bind $w <Configure> "$this handleResize %W %w %h"`. Recurse on
+        # the last arg so Pattern B picks up the dispatched method. The
+        # generic recursion loop would skip it because there's no `\n[;]`
+        # in a single-line callback string and no `-flag` precedes it
+        # (so the Tk-callback regex pass below — which requires `-flag` —
+        # doesn't match either).
+        if {$first eq "bind" && [llength $words] >= 3} {
+            set body_arg [lindex $words end]
+            if {[string length $body_arg] >= 3} {
+                foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+            }
+            continue
+        }
+
+        # itk_component add ?-protected? NAME body ?config?
+        # body is the creation block (real TCL code). config is an iTk DSL
+        # block whose words (keep / ignore / usual / rename / -opt ...) are
+        # NOT TCL command calls. Recurse only on body; the config block must
+        # not be walked at all or its DSL keywords surface as spurious callees.
+        if {$first eq "itk_component" && [llength $words] >= 4 \
+                && [lindex $words 1] eq "add"} {
+            set idx 2
+            if {[lindex $words $idx] eq "-protected"} { incr idx }
+            # next word is NAME, then body
+            incr idx
+            if {$idx < [llength $words]} {
+                set body_arg [lindex $words $idx]
+                if {[string length $body_arg] >= 3} {
+                    foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+                }
+            }
+            continue
+        }
+
+        # itk_option define -switch resName ResClass init ?config?
+        # Only the optional config (last) arg is a body; preceding words are
+        # the option name, resource name/class, and default value (data).
+        if {$first eq "itk_option" && [llength $words] >= 6 \
+                && [lindex $words 1] eq "define"} {
+            set body_arg [lindex $words end]
+            if {[string length $body_arg] >= 3 && [regexp {[\n\[;]} $body_arg]} {
+                foreach c [_extract_collect $body_arg $skip] { lappend out $c }
+            }
+            continue
+        }
+
         set is_body_cmd [expr {$first in $body_cmds}]
 
         # Skip arg recursion entirely for value-eating builtins (set, puts,
@@ -765,6 +955,24 @@ proc _extract_collect {body skip} {
             if {$is_body_cmd} { set recurse 1 }
             if {[regexp {[\n\[;]} $w]} { set recurse 1 }
             if {!$recurse} continue
+            # Tk-option idiom: when prev word is `-flag`, current word is the
+            # option value. Most Tk options take data (text, color, geometry);
+            # only script-flags whose names end in `command` (-command,
+            # -yscrollcommand, -postcommand, -validatecommand, etc.) take a
+            # body. Without this guard, a multi-line `-text "..."` value with
+            # `\n` escapes inside the string falls into recursion and
+            # split_commands turns string content into spurious callees
+            # (e.g. capitalized prose words like "This"/"For"/"the").
+            if {$j > 1} {
+                # `string trim` because `\<newline>` line-continuation can
+                # leave the prev word with leading whitespace inside an
+                # lrange list element (rendered as `{ -text}` with a leading
+                # space) — the regex anchor would otherwise miss the dash.
+                set prev [string trim [lindex $words [expr {$j - 1}]]]
+                if {[regexp {^-[a-zA-Z]} $prev] && ![regexp {command$} $prev]} {
+                    continue
+                }
+            }
             # Skip bracket fragments. lrange splits [...] substitutions on
             # whitespace because the bracket chars are not list-grouping;
             # the bracket walker already handled them at the parent level,
@@ -908,7 +1116,7 @@ array set method_registry {}
 # start_char/end_char are character indices; char_to_byte_map translates them.
 proc emit_symbol {name qualified kind sig docstring start_char end_char
                   line_offsets char_byte_map parent cyclomatic max_nesting
-                  param_count calls annotations keywords} {
+                  param_count calls annotations keywords {unresolved {}}} {
     variable symbols
     variable method_registry
 
@@ -921,6 +1129,23 @@ proc emit_symbol {name qualified kind sig docstring start_char end_char
 
     if {[string length $sig] > 200} {
         set sig [string range $sig 0 196]...
+    }
+
+    # Convert body-relative unresolved-dispatch lines to file-absolute lines
+    # by anchoring on this symbol's start_line.  Each entry is a 3-list:
+    # {rel_line kind snippet}; emit as a JSON object with abs_line + kind +
+    # snippet keys.
+    set unresolved_json {}
+    foreach entry $unresolved {
+        set rel_line [lindex $entry 0]
+        set ud_kind  [lindex $entry 1]
+        set snippet  [lindex $entry 2]
+        set abs_line [expr {$start_line + $rel_line - 1}]
+        lappend unresolved_json [json_object [list \
+            line     [json_int $abs_line] \
+            kind     [json_string $ud_kind] \
+            snippet  [json_string $snippet] \
+        ]]
     }
 
     set sym [json_object [list \
@@ -938,6 +1163,7 @@ proc emit_symbol {name qualified kind sig docstring start_char end_char
         max_nesting   [json_int $max_nesting] \
         param_count   [json_int $param_count] \
         call_references [json_string_list $calls] \
+        unresolved_dispatches [json_list $unresolved_json] \
         decorators    [json_string_list $annotations] \
         keywords      [json_string_list $keywords] \
     ]]
@@ -1015,7 +1241,7 @@ proc parse_proc {cmd_text start_char end_char line_offsets char_byte_map scope} 
         $start_char $end_char $line_offsets $char_byte_map $scope \
         [count_cyclomatic $body] [count_max_nesting $body] \
         [count_params $args_str] [extract_calls $body] \
-        $annotations $keywords
+        $annotations $keywords [extract_unresolved $body]
 
     # Recursively parse nested procs in the body
     parse_body $body $start_char $line_offsets $char_byte_map $qualified
@@ -1256,7 +1482,8 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
                     $abs_start $abs_end $line_offsets $char_byte_map $scope \
                     [count_cyclomatic $method_body] [count_max_nesting $method_body] \
                     [count_params $args_str] [extract_calls $method_body] \
-                    [detect_annotations $method_body] [list "method"]
+                    [detect_annotations $method_body] [list "method"] \
+                    [extract_unresolved $method_body]
             } else {
                 emit_symbol $method_name "${scope}::${method_name}" "method" \
                     $sig "" \
@@ -1283,7 +1510,8 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
                     $abs_start $abs_end $line_offsets $char_byte_map $scope \
                     [count_cyclomatic $con_body] [count_max_nesting $con_body] \
                     [count_params $args_str] [extract_calls $con_body] \
-                    [detect_annotations $con_body] [list "constructor"]
+                    [detect_annotations $con_body] [list "constructor"] \
+                    [extract_unresolved $con_body]
             } elseif {[llength $parts] == 4} {
                 set args_str [lindex $parts 1]
                 set con_body [lindex $parts 3]
@@ -1292,7 +1520,8 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
                     $abs_start $abs_end $line_offsets $char_byte_map $scope \
                     [count_cyclomatic $con_body] [count_max_nesting $con_body] \
                     [count_params $args_str] [extract_calls $con_body] \
-                    [detect_annotations $con_body] [list "constructor"]
+                    [detect_annotations $con_body] [list "constructor"] \
+                    [extract_unresolved $con_body]
             } elseif {[llength $parts] >= 3} {
                 set args_str [lindex $parts 1]
                 set con_body [lindex $parts 2]
@@ -1301,7 +1530,8 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
                     $abs_start $abs_end $line_offsets $char_byte_map $scope \
                     [count_cyclomatic $con_body] [count_max_nesting $con_body] \
                     [count_params $args_str] [extract_calls $con_body] \
-                    [detect_annotations $con_body] [list "constructor"]
+                    [detect_annotations $con_body] [list "constructor"] \
+                    [extract_unresolved $con_body]
             }
 
         } elseif {$kw eq "destructor" && [llength $parts] >= 2} {
@@ -1314,7 +1544,8 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
                 $abs_start $abs_end $line_offsets $char_byte_map $scope \
                 [count_cyclomatic $dest_body] [count_max_nesting $dest_body] \
                 0 [extract_calls $dest_body] \
-                [detect_annotations $dest_body] [list "destructor"]
+                [detect_annotations $dest_body] [list "destructor"] \
+                [extract_unresolved $dest_body]
 
         } elseif {$kw eq "field" && [llength $parts] >= 2} {
             set field_name [lindex $parts 1]
@@ -1346,7 +1577,8 @@ proc parse_class_body {body base_offset line_offsets char_byte_map scope} {
                         $abs_start $abs_end $line_offsets $char_byte_map $scope \
                         [count_cyclomatic $pbody] [count_max_nesting $pbody] \
                         [count_params $args_str] [extract_calls $pbody] \
-                        [detect_annotations $pbody] [list "class_proc" $access]
+                        [detect_annotations $pbody] [list "class_proc" $access] \
+                        [extract_unresolved $pbody]
                 } else {
                     emit_symbol $pname "${scope}::${pname}" "function" \
                         $sig "" \
@@ -1488,7 +1720,7 @@ proc parse_itcl_body {cmd_text start_char end_char line_offsets char_byte_map sc
         $start_char $end_char $line_offsets $char_byte_map $class_scope \
         [count_cyclomatic $body] [count_max_nesting $body] \
         [count_params $args_str] [extract_calls $body] \
-        $annotations $body_keywords
+        $annotations $body_keywords [extract_unresolved $body]
 }
 
 proc parse_itcl_configbody {cmd_text start_char end_char line_offsets char_byte_map scope} {
@@ -1516,7 +1748,7 @@ proc parse_itcl_configbody {cmd_text start_char end_char line_offsets char_byte_
         $start_char $end_char $line_offsets $char_byte_map $class_scope \
         [count_cyclomatic $body] [count_max_nesting $body] \
         0 [extract_calls $body] \
-        $annotations [list "configbody"]
+        $annotations [list "configbody"] [extract_unresolved $body]
 }
 
 # Parse a body string for nested procs and namespace evals.
@@ -1645,11 +1877,15 @@ proc parse_body {body base_offset line_offsets char_byte_map scope {emit_script 
     if {$emit_script && $scope eq "" && [llength $script_cmd_texts] > 0} {
         set joined [join $script_cmd_texts "\n"]
         set script_calls [extract_calls $joined]
-        if {[llength $script_calls] > 0} {
+        # Unresolved-dispatch lines for __script__ are relative to the joined
+        # synthetic body (not the original file). Approximate; real per-call
+        # line attribution at file scope would need per-cmd offset bookkeeping.
+        set script_unresolved [extract_unresolved $joined]
+        if {[llength $script_calls] > 0 || [llength $script_unresolved] > 0} {
             emit_symbol "__script__" "__script__" "module" \
                 "" "" $script_first_start $script_last_end \
                 $line_offsets $char_byte_map "" 0 0 0 \
-                $script_calls {} {}
+                $script_calls {} {} $script_unresolved
         }
     }
 }

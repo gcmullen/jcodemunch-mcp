@@ -9166,6 +9166,7 @@ def _parse_tcl_native(source_bytes: bytes, filename: str) -> "list[Symbol]":
                 decorators=entry.get("decorators", []),
                 keywords=entry.get("keywords", []),
                 call_references=entry.get("call_references", []),
+                unresolved_dispatches=entry.get("unresolved_dispatches", []),
                 cyclomatic=entry.get("cyclomatic", 0),
                 max_nesting=entry.get("max_nesting", 0),
                 param_count=entry.get("param_count", 0),

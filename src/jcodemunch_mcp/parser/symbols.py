@@ -30,6 +30,7 @@ class Symbol:
     max_nesting: int = 0           # Max bracket-nesting depth relative to opening brace
     param_count: int = 0           # Number of parameters in the signature
     call_references: list[str] = field(default_factory=list)  # Called names from AST call_expression nodes
+    unresolved_dispatches: list[dict] = field(default_factory=list)  # Dynamic-dispatch sites we cannot statically follow (Tcl: eval $var, $cmd args, etc.). Each entry: {"line": int, "kind": str, "snippet": str}.
 
 
 
