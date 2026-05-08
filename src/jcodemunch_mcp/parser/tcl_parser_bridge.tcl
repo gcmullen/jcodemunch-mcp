@@ -741,6 +741,16 @@ proc _extract_collect {body skip} {
 
         set is_body_cmd [expr {$first in $body_cmds}]
 
+        # Skip arg recursion entirely for value-eating builtins (set, puts,
+        # return, string, list, format, regexp, etc.) — anything in the
+        # skip list that is not also a body_cmd. Their args are values not
+        # code; recursing risks treating string content like "PR ER\n\n"
+        # passed to `string trim` as a command sequence. Bracket
+        # substitutions inside their args are still picked up by
+        # _extract_brackets running on the outer cmd_text earlier in this
+        # iteration, so real call edges in those args are not lost.
+        if {$first in $skip && !$is_body_cmd} continue
+
         # Recurse into argument words. Always recurse when the outer
         # command is a body-taking control structure; otherwise only when
         # the word looks like code by content (newline / bracket / semicolon).

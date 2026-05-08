@@ -595,6 +595,28 @@ class TestExtractCallsNative:
         assert "realCall" in calls
         assert "fakeCall" not in calls
 
+    def test_value_eating_builtin_args_not_recursed(self):
+        # `set x [string trim $err "PR ER\\n\\n"]` — the bracket walker
+        # recurses into `string trim $err "PR ER\\n\\n"` and lrange unwraps
+        # the "..." string into `PR ER\\n\\n` which contains a literal \\n.
+        # Without the value-only guard the \\n triggers code recursion and
+        # captures `PR` as a Pattern A callee. With the guard, builtins
+        # like `string` short-circuit before the arg loop.
+        src = '''\
+proc value_only_string_arg {} {
+    set err [string trim $message "PR ER\\n\\n"]
+    set hi  [list "Click here" "Type next"]
+    return [format "got %s" $err]
+}
+'''
+        symbols = parse_file(src, "vouchers.tcl", "tcl")
+        sym = [s for s in symbols if s.name == "value_only_string_arg"][0]
+        assert "PR" not in sym.call_references
+        assert "ER" not in sym.call_references
+        assert "Click" not in sym.call_references
+        assert "Type" not in sym.call_references
+        assert "got" not in sym.call_references
+
 
 # ---------------------------------------------------------------------------
 # Tests: 3-arg iTcl constructor form — `constructor args init body` was
