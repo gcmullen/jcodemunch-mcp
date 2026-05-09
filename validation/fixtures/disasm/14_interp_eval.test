@@ -1,0 +1,7 @@
+# interp eval $other $cmd — slots 0/1 are LITERAL "interp"/"eval", later
+# slots include VAR. Walker tags as unresolved `interp_eval` per §4.6.
+set i {}
+set c {puts hi}
+interp eval $i $c
+---
+  interp_eval       cmd=3

@@ -1,0 +1,10 @@
+# Pattern A — bare and multi-segment FQN command names.
+# Multi-segment FQN (`::Foo::bar`) does NOT match Pattern A2; it falls
+# through to Pattern A as the more general row.
+foo bar baz
+puts hello
+::Foo::bar 1 2 3
+---
+  pattern_a         cmd=1 name=foo arg_count=3
+  pattern_a         cmd=2 name=puts arg_count=2
+  pattern_a         cmd=3 name=::Foo::bar arg_count=4

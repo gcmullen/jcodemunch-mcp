@@ -1,0 +1,7 @@
+# $obj $method — both command-name and method are VAR slots; no method
+# literal recoverable. Walker tags as unresolved `var_method` per §4.4.
+set obj 0
+set m foo
+$obj $m arg
+---
+  var_method        cmd=3

@@ -1,0 +1,8 @@
+# Ensemble (R10/R29) — chan ensemble pre-renamed to ::tcl::chan::SUB.
+# `set fd 0` is specialized; only the chan dispatch emits.
+set fd 0
+chan close $fd
+chan flush $fd
+---
+  ensemble          cmd=2 ensemble=chan subcommand=close arg_count=2
+  ensemble          cmd=3 ensemble=chan subcommand=flush arg_count=2

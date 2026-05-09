@@ -1,0 +1,10 @@
+# Ensemble — `string` ensemble (NEW per P1.1f / R32 corpus probe).
+# Note: `string length`/`compare`/`match`/`range` are specialized to
+# strlen/strcmp/strmatch/strrangeImm and emit no `::tcl::string::*`
+# literal — they produce no walker event for ensemble dispatch (their
+# specialized opcodes are P1.2 metric-walker concerns, not pattern
+# dispatch). Only `string repeat` (and other unspecialized subcommands)
+# falls through the ensemble path.
+string repeat x 3
+---
+  ensemble          cmd=1 ensemble=string subcommand=repeat arg_count=3

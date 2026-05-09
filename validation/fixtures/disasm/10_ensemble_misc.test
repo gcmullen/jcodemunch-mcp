@@ -1,0 +1,8 @@
+# Ensemble — miscellaneous corpus-natural subcommands (P1.1f).
+# `info hostname`, `file exists`, `namespace children` all surface as
+# `::tcl::ENSEMBLE::SUB` literals through the ensemble dispatch path.
+info hostname
+file exists /tmp
+---
+  ensemble          cmd=1 ensemble=info subcommand=hostname arg_count=1
+  ensemble          cmd=2 ensemble=file subcommand=exists arg_count=2

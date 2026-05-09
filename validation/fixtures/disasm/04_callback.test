@@ -1,0 +1,8 @@
+# Callback — Tk-style "$obj method" string-concat dispatch.
+# Walker recovers the method literal from the strcat shape.
+set obj 0
+bind .w <Key> "$obj method"
+button .b -command "$obj select"
+---
+  callback          cmd=2 method=method
+  callback          cmd=3 method=select

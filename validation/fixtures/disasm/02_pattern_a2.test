@@ -1,0 +1,7 @@
+# Pattern A2 — single-segment FQN dispatch (`::ns method args`).
+# Walker captures both the FQN and the method-name literal.
+::ns method arg
+::Foo bar
+---
+  pattern_a2        cmd=1 fqn=::ns method=method arg_count=3
+  pattern_a2        cmd=2 fqn=::Foo method=bar arg_count=2

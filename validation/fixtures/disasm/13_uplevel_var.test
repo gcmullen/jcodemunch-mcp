@@ -1,0 +1,8 @@
+# uplevel $script — slot 0 is LITERAL "uplevel", last slot is VAR.
+# Walker tags as unresolved `uplevel_var` per §4.5.
+set s {puts hi}
+uplevel 1 $s
+uplevel #0 $s
+---
+  uplevel_var       cmd=2
+  uplevel_var       cmd=3

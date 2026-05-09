@@ -1,0 +1,9 @@
+# Specialized opcodes — verifies the "GONE" rules from PLAN_v2.1 §2.5/§2.6.
+# Tcl 8.6 compiles these to direct opcodes (storeStk, jumpFalse1, etc.)
+# rather than dispatching through invokeStk. The walker correctly emits
+# nothing for them; their value-handling is the substrate's job.
+set x 1
+if {$x > 0} { incr x }
+incr x 2
+return $x
+---

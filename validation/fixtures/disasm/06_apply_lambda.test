@@ -1,0 +1,7 @@
+# apply literal lambda (R8) — invokeStk where slot 0 == LITERAL "apply"
+# and slot 1 is a list-shaped literal containing braces.
+apply {{x} { puts $x }} 1
+apply {{a b} { return [expr {$a + $b}] }} 2 3
+---
+  apply_lambda      cmd=1 lambda={x} { puts $x }
+  apply_lambda      cmd=2 lambda={a b} { return [expr {$a + $b}] }

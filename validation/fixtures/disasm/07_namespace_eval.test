@@ -1,0 +1,7 @@
+# namespace eval (R9) — terminal opcode is invokeReplace; the resolved
+# `::tcl::namespace::eval` literal is the LAST push, ns at -3, body at -2.
+namespace eval ::Foo { proc x {} {} }
+namespace eval ::Bar::Baz { variable z 0 }
+---
+  namespace_eval    cmd=1 ns=::Foo body= proc x {} {} 
+  namespace_eval    cmd=2 ns=::Bar::Baz body= variable z 0 

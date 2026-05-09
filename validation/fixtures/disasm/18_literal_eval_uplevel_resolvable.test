@@ -1,0 +1,10 @@
+# eval / uplevel with LITERAL body — these are NOT unresolved. They
+# resolve to pattern_a (the eval/uplevel call) and the body recurses
+# in P1.2's recursion-table sub-table A. P1.1 walker emits pattern_a.
+# Compare to fixtures 11/13 (eval $var, uplevel $var) which are tagged
+# unresolved.
+eval {puts hi}
+uplevel 1 {puts hi}
+---
+  pattern_a         cmd=1 name=eval arg_count=2
+  pattern_a         cmd=2 name=uplevel arg_count=3

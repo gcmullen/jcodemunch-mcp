@@ -1,0 +1,6 @@
+# eval $var — slot 0 is LITERAL "eval", slot 1 is VAR. Walker tags as
+# unresolved `eval_var` per §4.1.
+set s {puts hi}
+eval $s
+---
+  eval_var          cmd=2

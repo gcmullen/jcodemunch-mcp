@@ -1,0 +1,14 @@
+# {*} arg expansion (R7) — terminal opcode is invokeExpanded.
+# Walker captures the command-name literal from the first push after
+# expandStart. Bracket-substituted args (`puts {*}[list a b]`) are a
+# sub-table B inlining case: Tcl 8.6 constant-folds the literal list
+# and the resulting bytecode is split across "Command N:" headers in a
+# way the per-command walker cannot resolve cleanly. The P1.2 bridge
+# refines via cross-pc attribution; P1.1 covers the literal/var forms.
+set args {a b}
+foo {*}$args
+set xs {c d e}
+puts {*}$xs
+---
+  expand_args       cmd=2 name=foo
+  expand_args       cmd=4 name=puts

@@ -1,0 +1,9 @@
+# Pattern B — variable-receiver method dispatch.
+# `set obj 0` is specialized at the bytecode layer (storeStk/pop) and
+# emits no walker event; only the var-method dispatch produces one.
+set obj 0
+$obj method arg
+$widget configure -text x
+---
+  pattern_b         cmd=2 method=method arg_count=3
+  pattern_b         cmd=3 method=configure arg_count=4

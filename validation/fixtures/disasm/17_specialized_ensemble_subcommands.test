@@ -1,0 +1,11 @@
+# Specialized ensemble subcommands — `string length`/`compare`/`match`/
+# `range` and `dict get` compile to direct opcodes (strlen, strcmp,
+# strmatch, strrangeImm, dictGet) and emit no `::tcl::ENSEMBLE::*`
+# literal. The walker correctly does not see them as ensemble dispatch.
+# (PLAN_v2.1 §2.3 "Notable empirical finding" + ENSEMBLE_VERDICT.md.)
+set s "hello"
+string length $s
+string compare $s "world"
+set d {a 1 b 2}
+dict get $d a
+---

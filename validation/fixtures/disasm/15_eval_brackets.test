@@ -1,0 +1,10 @@
+# eval [bracket] — sub-table B inlining: outer command's invokeStk lives
+# at the inner command's pc range. P1.1 walker uses a heuristic: outer
+# command with only `push "eval"` and no terminal invoke is tagged
+# `eval_brackets`. The inlined `gc` call appears as its own pattern_a.
+proc gc {} { return {puts hi} }
+eval [gc]
+---
+  pattern_a         cmd=1 name=proc arg_count=4
+  eval_brackets     cmd=2
+  pattern_a         cmd=3 name=gc arg_count=2
