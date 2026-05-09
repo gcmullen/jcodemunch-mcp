@@ -4,5 +4,5 @@ set fd 0
 chan close $fd
 chan flush $fd
 ---
-  ensemble          cmd=2 ensemble=chan subcommand=close arg_count=2
-  ensemble          cmd=3 ensemble=chan subcommand=flush arg_count=2
+  ensemble          cmd=2 src_start=140 src_end=153 ensemble=chan subcommand=close arg_count=2
+  ensemble          cmd=3 src_start=155 src_end=168 ensemble=chan subcommand=flush arg_count=2

@@ -10,5 +10,5 @@ foo {*}$args
 set xs {c d e}
 puts {*}$xs
 ---
-  expand_args       cmd=2 name=foo
-  expand_args       cmd=4 name=puts
+  expand_args       cmd=2 src_start=497 src_end=508 name=foo
+  expand_args       cmd=4 src_start=525 src_end=535 name=puts

@@ -5,5 +5,5 @@ set obj 0
 $obj method arg
 $widget configure -text x
 ---
-  pattern_b         cmd=2 method=method arg_count=3
-  pattern_b         cmd=3 method=configure arg_count=4
+  pattern_b         cmd=2 src_start=199 src_end=213 method=method arg_count=3
+  pattern_b         cmd=3 src_start=215 src_end=239 method=configure arg_count=4

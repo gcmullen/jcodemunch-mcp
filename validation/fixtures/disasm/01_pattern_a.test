@@ -5,6 +5,6 @@ foo bar baz
 puts hello
 ::Foo::bar 1 2 3
 ---
-  pattern_a         cmd=1 name=foo arg_count=3
-  pattern_a         cmd=2 name=puts arg_count=2
-  pattern_a         cmd=3 name=::Foo::bar arg_count=4
+  pattern_a         cmd=1 src_start=177 src_end=187 name=foo arg_count=3
+  pattern_a         cmd=2 src_start=189 src_end=198 name=puts arg_count=2
+  pattern_a         cmd=3 src_start=200 src_end=215 name=::Foo::bar arg_count=4

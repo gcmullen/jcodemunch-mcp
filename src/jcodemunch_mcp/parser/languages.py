@@ -1857,9 +1857,11 @@ NIM_SPEC = LanguageSpec(
 
 
 # Tcl specification
-# tree-sitter node structure: procedure > proc + simple_word + arguments + braced_word
-# namespace > namespace + word_list (eval <name> { ... })
-# Custom parser in extractor.py via _parse_tcl_symbols().
+# Canonical TCL parser is tcl_disasm_bridge.tcl (shells out to tclsh 8.6+)
+# wired via extractor.py::_parse_tcl_native(). The bridge is the single
+# extraction substrate per PLAN_v2.1 §0.2 rule 1; there is no tree-sitter
+# fallback. If tclsh is not installed, parsing fails with installation
+# instructions (see _tcl_install_instructions in extractor.py).
 TCL_SPEC = LanguageSpec(
     ts_language="tcl",
     symbol_node_types={},

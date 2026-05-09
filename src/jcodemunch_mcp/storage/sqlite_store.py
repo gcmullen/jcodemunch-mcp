@@ -296,6 +296,24 @@ def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
+    """Migrate a v9 database to v10: TCL bridge adds parent_classes + package_requires.
+
+    These fields are stored in each symbol's JSON ``data`` column (no new SQL
+    columns) and are therefore schema-forward-compatible for non-TCL repos.
+    TCL repos must re-index to populate the new fields; old TCL indexes are
+    still loadable but will lack parent_classes / package_requires data.
+    """
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        ("index_version", "10"),
+    )
+    logger.info(
+        "Migrated v9→v10: TCL bridge schema additions (parent_classes, "
+        "package_requires). TCL repos should re-index to populate new fields."
+    )
+
+
 def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
     """Migrate a v8 database to v9: add branch_deltas and branch_meta tables."""
     # Create branch tables if they don't exist (idempotent)
@@ -416,6 +434,8 @@ class SQLiteIndexStore:
                     _migrate_v7_to_v8(conn)
                 if stored_version < 9:
                     _migrate_v8_to_v9(conn)
+                if stored_version < 10:
+                    _migrate_v9_to_v10(conn)
 
             SQLiteIndexStore._initialized_dbs.add(db_key)
 

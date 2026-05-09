@@ -1,0 +1,8 @@
+# Bracket-inline if — `if [catch ...] {body}` is sub-table B inlining.
+# Strategy A flat-pc walk: catch's invokeStk1 3 (pc 8, src 4-18 → cmd 2)
+# fires first, then if's invokeStk1 3 (pc 12, src 0-29 → cmd 1).
+# Innermost-wins anchors catch to cmd 2 and if to cmd 1.
+if [catch "foo" err] {puts hi}
+---
+  pattern_a         cmd=2 src_start=276 src_end=290 name=catch arg_count=3
+  pattern_a         cmd=1 src_start=272 src_end=301 name=if arg_count=3

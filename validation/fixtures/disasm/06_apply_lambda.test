@@ -3,5 +3,5 @@
 apply {{x} { puts $x }} 1
 apply {{a b} { return [expr {$a + $b}] }} 2 3
 ---
-  apply_lambda      cmd=1 lambda={x} { puts $x }
-  apply_lambda      cmd=2 lambda={a b} { return [expr {$a + $b}] }
+  apply_lambda      cmd=1 src_start=131 src_end=155 lambda={x} { puts $x }
+  apply_lambda      cmd=2 src_start=157 src_end=201 lambda={a b} { return [expr {$a + $b}] }

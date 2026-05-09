@@ -7,4 +7,4 @@
 # falls through the ensemble path.
 string repeat x 3
 ---
-  ensemble          cmd=1 ensemble=string subcommand=repeat arg_count=3
+  ensemble          cmd=1 src_start=452 src_end=468 ensemble=string subcommand=repeat arg_count=3

@@ -4,5 +4,5 @@ set s {puts hi}
 uplevel 1 $s
 uplevel #0 $s
 ---
-  uplevel_var       cmd=2
-  uplevel_var       cmd=3
+  uplevel_var       cmd=2 src_start=138 src_end=149
+  uplevel_var       cmd=3 src_start=151 src_end=163

@@ -321,7 +321,7 @@ def parse_file(content: str, filename: str, language: str, source_bytes: Optiona
     elif language == "nim":
         symbols = _parse_nim_symbols(source_bytes, filename)
     elif language == "tcl":
-        symbols = _parse_tcl_symbols(source_bytes, filename)
+        symbols = _parse_tcl_native(source_bytes, filename)
     elif language == "dlang":
         symbols = _parse_dlang_symbols(source_bytes, filename)
     elif language in ("sass", "less", "styl"):
@@ -1783,7 +1783,10 @@ def _disambiguate_and_compute_complexity(
         if has_duplicates and sym.id in duplicated:
             ordinals[sym.id] = ordinals.get(sym.id, 0) + 1
             sym.id = f"{sym.id}~{ordinals[sym.id]}"
-        if sym.kind in _CALLABLE_KINDS and sym.byte_length > 0:
+        # TCL symbols carry bridge-computed metrics that already understand
+        # `proc name {args} body` brace-style signatures; the generic
+        # paren-based compute_complexity would zero out param_count for them.
+        if sym.kind in _CALLABLE_KINDS and sym.byte_length > 0 and sym.language != "tcl":
             body = source_bytes[sym.byte_offset:sym.byte_offset + sym.byte_length].decode("utf-8", errors="replace")
             sym.cyclomatic, sym.max_nesting, sym.param_count = compute_complexity(body, sym.signature)
         result.append(sym)
@@ -9049,92 +9052,140 @@ def _parse_nim_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
 
 
 # ---------------------------------------------------------------------------
-# Tcl custom parser
+# Tcl native parser — shells out to tclsh + tcl_disasm_bridge.tcl for the
+# disasm-based, schema-rich parse. The bridge is the canonical TCL parser
+# per PLAN_v2.1 §0.2 rule 1 (single extraction substrate); there is NO
+# fallback. If tclsh is not installed, parsing fails with installation
+# instructions for Debian/Ubuntu, RHEL/Fedora, and macOS.
 # ---------------------------------------------------------------------------
 
-def _parse_tcl_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
-    """Extract symbols from Tcl source code using tree-sitter."""
-    parser = get_parser("tcl")
-    tree = parser.parse(source_bytes)
+import json as _json
+import logging as _logging
+import shutil as _shutil
+import subprocess as _subprocess
+import tempfile as _tempfile
+from pathlib import Path as _Path
+
+_tcl_logger = _logging.getLogger(__name__)
+_TCL_BRIDGE_SCRIPT = str(_Path(__file__).parent / "tcl_disasm_bridge.tcl")
+_tclsh_path: "str | None | bool" = False  # False = not yet checked
+
+
+def _tcl_install_instructions(detail: str) -> str:
+    """Build a multi-platform tclsh install-instructions error message."""
+    return (
+        "jcodemunch-mcp requires tclsh 8.6 to parse TCL files.\n"
+        "  Debian/Ubuntu:  sudo apt install tcl8.6\n"
+        "  RHEL/Fedora:    sudo dnf install tcl\n"
+        "  macOS (brew):   brew install tcl-tk\n"
+        "  Verify:         tclsh -e 'puts $tcl_patchLevel'\n"
+        "  Required:       8.6.x (8.6.14 verified; lower 8.6 versions expected stable)\n"
+        f"  Failure detail: {detail}"
+    )
+
+
+def _find_tclsh() -> "str | None":
+    """Find tclsh on PATH, caching the result."""
+    global _tclsh_path
+    if _tclsh_path is not False:
+        return _tclsh_path  # type: ignore[return-value]
+    _tclsh_path = _shutil.which("tclsh")
+    if _tclsh_path is None:
+        _tcl_logger.debug("tclsh not found on PATH; TCL native parser unavailable")
+    return _tclsh_path
+
+
+def _parse_tcl_native(source_bytes: bytes, filename: str) -> "list[Symbol]":
+    """Extract symbols via tclsh tcl_disasm_bridge.tcl.
+
+    Writes source to a temp file, runs the bridge, parses the JSON output
+    into Symbol objects.
+
+    Raises RuntimeError with multi-platform installation instructions if
+    tclsh is not installed or the bridge fails. There is NO fallback: the
+    bridge is the canonical TCL parser per PLAN_v2.1 §0.2 rule 1 (single
+    extraction substrate).
+    """
+    tclsh = _find_tclsh()
+    if tclsh is None:
+        raise RuntimeError(_tcl_install_instructions("tclsh not in PATH"))
+
+    import os as _os
+    tmp_path = None
+    try:
+        tmp_fd, tmp_path = _tempfile.mkstemp(suffix=".tcl", prefix="jcm_tcl_")
+        try:
+            _os.write(tmp_fd, source_bytes)
+        finally:
+            _os.close(tmp_fd)
+
+        result = _subprocess.run(
+            [tclsh, _TCL_BRIDGE_SCRIPT, tmp_path],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(_tcl_install_instructions(
+                f"tcl_disasm_bridge.tcl failed (rc={result.returncode}) for {filename}: {stderr[:200]}"
+            ))
+
+        raw_json = result.stdout.decode("utf-8", errors="replace")
+        if not raw_json.strip():
+            return []
+        entries = _json.loads(raw_json)
+    except _subprocess.TimeoutExpired:
+        raise RuntimeError(_tcl_install_instructions(
+            f"tcl_disasm_bridge.tcl exceeded 30s timeout for {filename}"
+        ))
+    except (_json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(_tcl_install_instructions(
+            f"tcl_disasm_bridge.tcl error for {filename}: {exc}"
+        ))
+    finally:
+        if tmp_path is not None:
+            try:
+                _os.unlink(tmp_path)
+            except OSError:
+                pass
+
     symbols: list[Symbol] = []
-
-    def _text(node) -> str:
-        return node.text.decode("utf-8", errors="replace")
-
-    def _walk(node, scope: str = ""):
-        if node.type == "procedure":
-            # proc NAME ARGS BODY
-            children = [c for c in node.children if c.is_named]
-            # First named child after 'proc' is the name (simple_word),
-            # second is arguments
-            name_node = None
-            args_node = None
-            for child in children:
-                if child.type == "simple_word" and name_node is None:
-                    name_node = child
-                elif child.type == "arguments" and name_node is not None:
-                    args_node = child
-                    break
-            if name_node:
-                name = _text(name_node)
-                qualified = f"{scope}::{name}" if scope else name
-                sig = f"proc {name}"
-                if args_node:
-                    sig += f" {_text(args_node)}"
-                symbols.append(Symbol(
-                    id=make_symbol_id(filename, qualified, "function"),
-                    file=filename, name=name, qualified_name=qualified,
-                    kind="function", language="tcl",
-                    signature=sig[:120],
-                    docstring="",
-                    line=node.start_point[0] + 1,
-                    end_line=node.end_point[0] + 1,
-                    byte_offset=node.start_byte,
-                    byte_length=node.end_byte - node.start_byte,
-                    content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
-                ))
-                # Walk into body for nested procs
-                for child in node.children:
-                    if child.type == "braced_word":
-                        for inner in child.children:
-                            _walk(inner, qualified)
-                return
-
-        elif node.type == "namespace":
-            # namespace eval NAME { ... }
-            wl = None
-            for child in node.children:
-                if child.type == "word_list":
-                    wl = child
-                    break
-            if wl:
-                named = [c for c in wl.children if c.type == "simple_word"]
-                if len(named) >= 2 and _text(named[0]) == "eval":
-                    ns_name = _text(named[1])
-                    qualified = f"{scope}::{ns_name}" if scope else ns_name
-                    symbols.append(Symbol(
-                        id=make_symbol_id(filename, qualified, "class"),
-                        file=filename, name=ns_name, qualified_name=qualified,
-                        kind="class", language="tcl",
-                        signature=f"namespace eval {ns_name}",
-                        docstring="",
-                        line=node.start_point[0] + 1,
-                        end_line=node.end_point[0] + 1,
-                        byte_offset=node.start_byte,
-                        byte_length=node.end_byte - node.start_byte,
-                        content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
-                    ))
-                    # Walk inside the braced_word for nested procs
-                    for child in wl.children:
-                        if child.type == "braced_word":
-                            for inner in child.children:
-                                _walk(inner, qualified)
-                    return
-
-        for child in node.children:
-            _walk(child, scope)
-
-    _walk(tree.root_node)
+    for entry in entries:
+        try:
+            kind = entry["kind"]
+            qualified = entry["qualified_name"]
+            byte_off = entry.get("byte_offset", 0)
+            byte_len = entry.get("byte_length", 0)
+            sym_bytes = source_bytes[byte_off:byte_off + byte_len]
+            parent_qname = entry.get("parent", "") or None
+            symbols.append(Symbol(
+                id=make_symbol_id(filename, qualified, kind),
+                file=filename,
+                name=entry.get("name", ""),
+                qualified_name=qualified,
+                kind=kind,
+                language="tcl",
+                signature=entry.get("signature", ""),
+                docstring=entry.get("docstring", ""),
+                parent=make_symbol_id(filename, parent_qname, "class") if parent_qname else None,
+                line=entry.get("line", 0),
+                end_line=entry.get("end_line", 0),
+                byte_offset=byte_off,
+                byte_length=byte_len,
+                content_hash=compute_content_hash(sym_bytes) if sym_bytes else "",
+                decorators=entry.get("decorators", []),
+                keywords=entry.get("keywords", []),
+                call_references=entry.get("call_references", []),
+                unresolved_dispatches=entry.get("unresolved_dispatches", []),
+                parent_classes=entry.get("parent_classes", []),
+                package_requires=entry.get("package_requires", []),
+                cyclomatic=entry.get("cyclomatic", 0),
+                max_nesting=entry.get("max_nesting", 0),
+                param_count=entry.get("param_count", 0),
+            ))
+        except (KeyError, IndexError) as exc:
+            _tcl_logger.debug("Skipping malformed TCL symbol entry: %s", exc)
+            continue
     return symbols
 
 

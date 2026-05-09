@@ -4,5 +4,5 @@ set obj 0
 bind .w <Key> "$obj method"
 button .b -command "$obj select"
 ---
-  callback          cmd=2 method=method
-  callback          cmd=3 method=select
+  callback          cmd=2 src_start=132 src_end=158 method=method
+  callback          cmd=3 src_start=160 src_end=191 method=select

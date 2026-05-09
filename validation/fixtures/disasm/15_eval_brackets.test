@@ -1,10 +1,12 @@
-# eval [bracket] — sub-table B inlining: outer command's invokeStk lives
-# at the inner command's pc range. P1.1 walker uses a heuristic: outer
-# command with only `push "eval"` and no terminal invoke is tagged
-# `eval_brackets`. The inlined `gc` call appears as its own pattern_a.
+# eval [bracket] — Strategy A flat-pc walk: gc's invokeStk1 1 (pc 15) fires
+# BEFORE eval's invokeStk1 2 (pc 17). Innermost-wins anchors gc to cmd 3
+# (its own range, src 38-39); the outer eval is anchored to cmd 2 (src
+# 32-40, the eval-brackets command). Slot[1] of the eval invoke is an
+# EXPR invoke_result (the bracket result), so eval_brackets dispatch row
+# matches. This replaces the P1.1 _sub_table_b_heuristic.
 proc gc {} { return {puts hi} }
 eval [gc]
 ---
-  pattern_a         cmd=1 name=proc arg_count=4
-  eval_brackets     cmd=2
-  pattern_a         cmd=3 name=gc arg_count=2
+  pattern_a         cmd=1 src_start=423 src_end=453 name=proc arg_count=4
+  pattern_a         cmd=3 src_start=461 src_end=462 name=gc arg_count=1
+  eval_brackets     cmd=2 src_start=455 src_end=463

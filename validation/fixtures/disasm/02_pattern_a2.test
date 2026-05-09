@@ -3,5 +3,5 @@
 ::ns method arg
 ::Foo bar
 ---
-  pattern_a2        cmd=1 fqn=::ns method=method arg_count=3
-  pattern_a2        cmd=2 fqn=::Foo method=bar arg_count=2
+  pattern_a2        cmd=1 src_start=127 src_end=141 fqn=::ns method=method arg_count=3
+  pattern_a2        cmd=2 src_start=143 src_end=151 fqn=::Foo method=bar arg_count=2

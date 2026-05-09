@@ -247,7 +247,7 @@ def test_tcl_parsing():
     assert "add" in names
     assert names["add"].kind == "function"
     assert "MyNS" in names
-    assert names["MyNS"].kind == "class"
+    assert names["MyNS"].kind == "namespace"
     assert "helper" in names
     assert names["helper"].kind == "function"
     assert names["helper"].qualified_name == "MyNS::helper"

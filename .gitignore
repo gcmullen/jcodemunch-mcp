@@ -54,6 +54,9 @@ dmypy.json
 # Claude Code local settings (may contain credentials from allowed commands)
 .claude/
 
+# OMC session artifacts (per-session state, plans, research, logs)
+.omc/
+
 # Local working notes (may contain sensitive info)
 prompt.md
 todo.md

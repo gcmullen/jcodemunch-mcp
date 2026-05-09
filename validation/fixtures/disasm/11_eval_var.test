@@ -3,4 +3,4 @@
 set s {puts hi}
 eval $s
 ---
-  eval_var          cmd=2
+  eval_var          cmd=2 src_start=123 src_end=129

@@ -56,11 +56,11 @@ class TestCallReferencesSymbolField:
 
 
 class TestIndexVersionBump:
-    """INDEX_VERSION is bumped to 9."""
+    """INDEX_VERSION is bumped to 10 (TCL bridge schema additions)."""
 
     def test_index_version_is_9(self):
-        """INDEX_VERSION constant must be 9 after this change."""
-        assert INDEX_VERSION == 9
+        """INDEX_VERSION constant must be 10 after TCL bridge schema bump."""
+        assert INDEX_VERSION == 10
 
 
 class TestCallersByNameIndex:

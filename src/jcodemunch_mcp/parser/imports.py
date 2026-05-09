@@ -447,7 +447,23 @@ _LANGUAGE_EXTRACTORS = {
     "asm": _extract_asm_imports,
     "vhdl": _extract_vhdl_imports,
     "verilog": _extract_verilog_imports,
+    "tcl": lambda c: _extract_tcl_imports(c),
 }
+
+
+def _extract_tcl_imports(content: str) -> list[dict]:
+    """Extract package require, source, and namespace import statements."""
+    out: list[dict] = []
+    pkg_re = re.compile(r"^\s*package\s+require\s+(?:-exact\s+)?(\S+)", re.MULTILINE)
+    src_re = re.compile(r"""^\s*source\s+(?:["{])?([^"\s}]+)["}]?""", re.MULTILINE)
+    ns_re = re.compile(r"^\s*namespace\s+import\s+(?:-force\s+)?(\S+)", re.MULTILINE)
+    for m in pkg_re.finditer(content):
+        out.append({"specifier": m.group(1), "names": []})
+    for m in src_re.finditer(content):
+        out.append({"specifier": m.group(1), "names": []})
+    for m in ns_re.finditer(content):
+        out.append({"specifier": m.group(1), "names": []})
+    return out
 
 
 def extract_imports(content: str, file_path: str, language: str) -> list[dict]:

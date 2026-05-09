@@ -3,5 +3,5 @@
 namespace eval ::Foo { proc x {} {} }
 namespace eval ::Bar::Baz { variable z 0 }
 ---
-  namespace_eval    cmd=1 ns=::Foo body= proc x {} {} 
-  namespace_eval    cmd=2 ns=::Bar::Baz body= variable z 0 
+  namespace_eval    cmd=1 src_start=148 src_end=184 ns=::Foo body= proc x {} {} 
+  namespace_eval    cmd=2 src_start=186 src_end=227 ns=::Bar::Baz body= variable z 0 

@@ -4,4 +4,4 @@ set obj 0
 set m foo
 $obj $m arg
 ---
-  var_method        cmd=3
+  var_method        cmd=3 src_start=166 src_end=176

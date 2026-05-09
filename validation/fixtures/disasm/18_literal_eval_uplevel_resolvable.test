@@ -6,5 +6,5 @@
 eval {puts hi}
 uplevel 1 {puts hi}
 ---
-  pattern_a         cmd=1 name=eval arg_count=2
-  pattern_a         cmd=2 name=uplevel arg_count=3
+  pattern_a         cmd=1 src_start=294 src_end=307 name=eval arg_count=2
+  pattern_a         cmd=2 src_start=309 src_end=327 name=uplevel arg_count=3

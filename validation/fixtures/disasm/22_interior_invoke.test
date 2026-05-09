@@ -1,0 +1,9 @@
+# Interior invoke — `foo [bar baz] qux`. The Q5 case: bar's invokeStk1 2
+# (pc 6) is interior (its result feeds foo's slot 1), foo's invokeStk1 3
+# (pc 10) is terminal. Under Strategy A both emit pattern_a; bar fires
+# first (flat pc order, anchored to cmd 2 via innermost-wins), foo
+# anchors to cmd 1.
+foo [bar baz] qux
+---
+  pattern_a         cmd=2 src_start=311 src_end=317 name=bar arg_count=2
+  pattern_a         cmd=1 src_start=306 src_end=322 name=foo arg_count=3

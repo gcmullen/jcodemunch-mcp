@@ -4,5 +4,5 @@
 info hostname
 file exists /tmp
 ---
-  ensemble          cmd=1 ensemble=info subcommand=hostname arg_count=1
-  ensemble          cmd=2 ensemble=file subcommand=exists arg_count=2
+  ensemble          cmd=1 src_start=205 src_end=217 ensemble=info subcommand=hostname arg_count=1
+  ensemble          cmd=2 src_start=219 src_end=234 ensemble=file subcommand=exists arg_count=2

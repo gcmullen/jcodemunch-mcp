@@ -33,10 +33,11 @@ while {$argv_idx < [llength $::argv]} {
     incr argv_idx
 }
 
-# Reference table — what PLAN_v2.1 §2.3 currently asserts based on the
-# 24-file oracle subset. Source: PLAN_v2.1.md §2.3 ensemble pre-rename.
+# Reference table — post-R32 ENSEMBLE_VERDICT (10 ensembles, includes
+# `string` added after P1.1(f) full-corpus probe). Source: PLAN_v2.1.md
+# §2.3 ensemble pre-rename + ENSEMBLE_VERDICT.md.
 set REFERENCE_ENSEMBLES {
-    array binary chan clock dict encoding file info namespace
+    array binary chan clock dict encoding file info namespace string
 }
 
 # Synthetic constructs to force-exercise common ensemble subcommands in

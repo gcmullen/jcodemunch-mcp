@@ -1,0 +1,9 @@
+# Nested brackets — `puts [lindex [split $s ","] 0]`. 3 cmds, 3 src
+# ranges (0-29, 6-28, 14-25). `lindex` specializes to listIndexImm
+# (silent), so only `split` (pattern_a, cmd 3) and `puts` (pattern_a,
+# cmd 1) emit. Innermost-wins anchors split to cmd 3, puts to cmd 1.
+# Locks §3.1.2 empirical example (3-level nesting).
+puts [lindex [split $s ","] 0]
+---
+  pattern_a         cmd=3 src_start=343 src_end=354 name=split arg_count=3
+  pattern_a         cmd=1 src_start=329 src_end=358 name=puts arg_count=2

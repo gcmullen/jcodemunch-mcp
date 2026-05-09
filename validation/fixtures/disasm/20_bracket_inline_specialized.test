@@ -1,0 +1,7 @@
+# Bracket-inline with specialized opcodes — `set x [lindex $argv 0]`.
+# Tcl 8.6 specializes both `set` (storeStk) and `lindex $argv 0`
+# (loadStk + listIndexImm). No invokeStk events fire; the walker emits
+# nothing. Locks the §3.2 SPECIALIZED_OP rows for storeStk + listIndexImm
+# under Strategy A flat-pc walk.
+set x [lindex $argv 0]
+---

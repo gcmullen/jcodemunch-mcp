@@ -2,6 +2,72 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [Unreleased] — TCL bridge rewrite (P1.2)
+
+### **BREAKING CHANGE**: TCL parsing now requires tclsh 8.6+
+
+The `tcl_disasm_bridge.tcl` is now the canonical TCL parser per
+PLAN_v2.1 §0.2 rule 1 (single extraction substrate). The previous
+tree-sitter fallback (`_parse_tcl_symbols`) has been removed.
+
+**Impact**: indexing TCL files on a host without `tclsh` installed
+now raises `RuntimeError` with multi-platform install instructions
+instead of silently falling back to a less accurate tree-sitter
+parser. Tree-sitter's TCL grammar conflated `namespace eval` with
+`class` (incorrect per TCL semantics); the bridge correctly
+distinguishes them.
+
+**Install instructions** (surfaced in the error message):
+
+```
+jcodemunch-mcp requires tclsh 8.6 to parse TCL files.
+  Debian/Ubuntu:  sudo apt install tcl8.6
+  RHEL/Fedora:    sudo dnf install tcl
+  macOS (brew):   brew install tcl-tk
+  Verify:         tclsh -e 'puts $tcl_patchLevel'
+  Required:       8.6.x (8.6.14 verified; lower 8.6 versions expected stable)
+```
+
+If you do not need TCL indexing, ensure your repos contain no `.tcl`
+or `.itcl` files (or remove TCL from your indexing scope).
+
+### Schema additions (INDEX_VERSION 9 → 10)
+
+- **`parent_classes: list[{name, line}]`** on class symbols. Captures
+  iTcl `inherit` and TclOO `superclass` declarations with their
+  source-line numbers. Always present, always a list, empty → `[]`.
+  Powers `get_class_hierarchy` runtime-free queries.
+- **`package_requires: list[{name, version|null}]`** on the file's
+  `__script__` symbol. Captures `package require NAME ?VERSION?`
+  declarations. Always present, always a list. `version` is `null`
+  when source omits it. Powers version-aware `get_dependency_graph`
+  queries.
+- `package require` ALSO emits the existing `kind=import` symbol —
+  both sources populated from the same parse for backward
+  compatibility with `find_importers`.
+
+### Reindex required
+
+INDEX_VERSION bumps 9 → 10. Existing indexes are still loadable but
+TCL repos will lack `parent_classes` and `package_requires` data until
+re-indexed. Run `jcodemunch-mcp index-folder` (or `index`) on each
+affected repo. The storage layer rejects indexes newer than the running
+version with a clear warning.
+
+### TCL bridge internals (no user-visible behaviour change)
+
+- Walker rewritten per Strategy A (flat pc stream; anchor by src range;
+  every-invoke-pops-N-pushes-1). Closes the 2/12,010 corpus events
+  that P1.1 left as `unrecognized`.
+- 18-fixture suite grew to 22 fixtures locking bracket-inlining
+  Strategy A correctness.
+- 83 tests ported from `test_tcl_parser.py @ tcl-native-parser` + 4
+  new schema-field tests (87 total).
+- R31 pragma scanner (`pragma_scanner.tcl`): pre-pass extracting
+  `# JCM:dynamic`, `# JCM:export`, `# JCM:ignore` markers and
+  dynamic-body proc sites (`proc NAME ARGS [...]`). Output wired onto
+  symbols by the bridge driver.
+
 ## [1.83.0] — 2026-05-08 — `get_file_outline` no longer drops nested symbols
 
 Thanks to @sanyapuer (#278) for the diagnosis, fix, and the test discipline
