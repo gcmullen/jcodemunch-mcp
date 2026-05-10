@@ -8,7 +8,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -156,11 +156,67 @@ def _extract_from_csproj(content: str) -> Optional[str]:
     return None
 
 
-def extract_package_names(source_root: str) -> list[str]:
+def _sym_get(sym: Any, key: str, default: Any = None) -> Any:
+    """Read a field from either a Symbol dataclass or a dict-shaped symbol."""
+    if isinstance(sym, dict):
+        return sym.get(key, default)
+    return getattr(sym, key, default)
+
+
+def _extract_from_tcl_index(symbols: Optional[Iterable[Any]]) -> Optional[str]:
+    """Extract Tcl package name from indexed __script__ symbols.
+
+    Tcl has no manifest file — package dependencies are declared in source via
+    ``package require NAME ?VERSION?``. The Tcl bridge captures these into the
+    ``jcm_tcl_extensions`` side-table; this handler reads from indexed Symbol
+    data (the ``__script__`` synthetic symbol's ``package_requires`` field).
+
+    Returns the source-form package name for Tcl repos.  We surface the first
+    declared package name only — package_registry's existing extractor pattern
+    returns one string per language root, and the calling code already
+    iterates appropriately when a repo publishes more than one package.
+
+    Returns ``None`` if no Tcl ``__script__`` symbol carries any
+    ``package_requires`` entries (or no symbols are supplied).
+    """
+    if not symbols:
+        return None
+
+    for sym in symbols:
+        if _sym_get(sym, "name") != "__script__":
+            continue
+        if _sym_get(sym, "language") != "tcl":
+            continue
+        pkg_reqs = _sym_get(sym, "package_requires") or []
+        if not pkg_reqs:
+            continue
+        first = pkg_reqs[0]
+        if isinstance(first, dict):
+            name = first.get("name")
+        else:
+            name = getattr(first, "name", None)
+        if name and isinstance(name, str):
+            return name.strip()
+
+    return None
+
+
+def extract_package_names(
+    source_root: str,
+    symbols: Optional[Iterable[Any]] = None,
+) -> list[str]:
     """Read manifest files in source_root to find package names published by this repo.
 
     Supports Python (pyproject.toml, setup.cfg), JavaScript/TypeScript (package.json),
-    Go (go.mod), Rust (Cargo.toml), and C#/.NET (*.csproj).
+    Go (go.mod), Rust (Cargo.toml), C#/.NET (*.csproj), and Tcl (via indexed
+    ``__script__`` symbols' ``package_requires``).
+
+    Args:
+        source_root: Path to the repo root containing manifest files.
+        symbols: Optional iterable of indexed Symbol objects / dicts. Required
+            for the Tcl handler — Tcl has no manifest file so the package name
+            comes from the ``__script__`` synthetic symbol's ``package_requires``
+            field.  When ``None``, only file-based extractors run.
 
     Returns:
         List of package names (normalized). Empty list if no manifest found or on error.
@@ -224,6 +280,14 @@ def extract_package_names(source_root: str) -> list[str]:
                             names.append(name)
         except OSError:
             pass
+
+        # Tcl: no manifest file — read package_requires from indexed
+        # __script__ symbols (populated by the Tcl bridge).  Only runs
+        # when the caller passes a symbol stream (e.g. index_folder).
+        if symbols is not None:
+            tcl_name = _extract_from_tcl_index(symbols)
+            if tcl_name:
+                names.append(tcl_name)
 
     except Exception:
         logger.debug("extract_package_names failed for %s", source_root, exc_info=True)

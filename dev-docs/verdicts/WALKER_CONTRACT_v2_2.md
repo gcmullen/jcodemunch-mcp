@@ -423,38 +423,55 @@ row trigger the §3.1.4 unknown_opcode boundary recovery (one
 `unrecognized` event + reset stack + suppress until next
 startCommand) — empirically validated to prevent cascade failures.
 
+**Tier 2 contract: delta-correct, not shape-correct.** Tier 2
+entries (those NOT in `STACK_EFFECTS` but resolved at lookup time
+from `tclInstructionTable[]` via `_ensure_tier2_loaded` /
+`_tier2_synthesize`) provide canonical pop_count / push_count for
+**stack-balance tracking** but DO NOT preserve slot-shape
+information. For binary opcodes (e.g. `add`), Tier 2 produces a
+single-EXPR-pop-then-push instead of pop=2 / push=1 with EXPR
+shape preservation. Today this is invisible because no dispatch
+row consumes Tier 2 outputs at slot[-2] depth; if a future row
+needs slot-shape preservation for a Tier 2 opcode, the affected
+opcode must be **promoted to Tier 1 hand-classification**
+(`STACK_EFFECTS` row + corresponding shape rules).
+
 **SPECIALIZED_OP coverage**: the §2.5 GONE list (string length /
 compare / match / range / equal; dict get; incr; storeStk; listIndexImm)
 is captured. P1.1 fixtures 16-18 cover these silently — they should
 still produce zero events under Strategy A. New SPECIALIZED_OP rows
 extend the table additively.
 
-### 3.3 Dispatch table (14 rows; +var_command per §13.5; +computed_namespace per §13.6)
+### 3.3 Dispatch table (16 rows; +var_command per §13.5; +computed_namespace + ensemble_fqn_rewrite per §13.6 C-2 split)
 
 Order and 11 of 12 P1.1 predicates preserved verbatim. The
 eval_brackets row gains an explicit dispatch predicate (P1.1's
 `_sub_table_b_heuristic` is **deleted**; its work folds into
-Strategy A's stack model). Two rows added per resolved §13
-decisions: `var_command` (priority 10.5) and `computed_namespace`
-(priority 12.5):
+Strategy A's stack model). Three rows added per resolved §13
+decisions: `var_command` (§13.5) and `computed_namespace` +
+`ensemble_fqn_rewrite` (§13.6 USER-DECIDED C-2 split). The two
+new invokeReplace rows fire BEFORE the existing
+`namespace_eval` row so first-match-wins anchoring of the more
+specific shapes survives:
 
 ```
 DISPATCH (priority order, most-specific first):
-    namespace_eval     match: op==invokeReplace AND last slot LITERAL "::tcl::namespace::eval"
-    expand_args        match: op==invokeExpanded
-    callback           match: op==invokeStk{1,4} AND last slot EXPR strcat-with-method
-    apply_lambda       match: op==invokeStk{1,4} AND slot 0 LITERAL "apply" AND slot 1 LITERAL list-shaped
-    ensemble           match: op==invokeStk{1,4} AND slot 0 LITERAL "::tcl::ENSEMBLE::SUB"
-    eval_var           match: op==invokeStk{1,4} AND slot 0 LITERAL "eval" AND slot 1 VAR
-    eval_brackets      match: op==invokeStk{1,4} AND slot 0 LITERAL "eval" AND slot 1 EXPR invoke_result
-    uplevel_var        match: op==invokeStk{1,4} AND slot 0 LITERAL "uplevel" AND last slot VAR
-    interp_eval        match: op==invokeStk{1,4} AND slot 0 LITERAL "interp" AND slot 1 LITERAL "eval"
-    var_method         match: op==invokeStk{1,4} AND slot 0 VAR AND slot 1 VAR
-    var_command        match: op==invokeStk{1,4} AND slot 0 VAR AND N==1   # §13.5
-    pattern_b          match: op==invokeStk{1,4} AND slot 0 VAR AND slot 1 LITERAL
-    pattern_a2         match: op==invokeStk{1,4} AND slot 0 LITERAL "::ns" (single-segment FQN) AND slot 1 LITERAL
-    computed_namespace match: op==invokeReplace AND last slot != LITERAL "::tcl::namespace::eval"   # §13.6
-    pattern_a          match: op==invokeStk{1,4} AND slot 0 LITERAL (fallback)
+    computed_namespace    match: op==invokeReplace AND last slot LITERAL "::tcl::namespace::eval" AND ≥1 interior slot is VAR   # §13.6 Shape A
+    ensemble_fqn_rewrite  match: op==invokeReplace AND last slot LITERAL ^::tcl::(array|binary|chan|clock|dict|encoding|file|info|namespace|string)::SUB$ AND last slot != "::tcl::namespace::eval"   # §13.6 Shape B; emits kind=ensemble
+    namespace_eval        match: op==invokeReplace AND last slot LITERAL "::tcl::namespace::eval"
+    expand_args           match: op==invokeExpanded
+    callback              match: op==invokeStk{1,4} AND last slot EXPR strcat-with-method
+    apply_lambda          match: op==invokeStk{1,4} AND slot 0 LITERAL "apply" AND slot 1 LITERAL list-shaped
+    ensemble              match: op==invokeStk{1,4} AND slot 0 LITERAL "::tcl::ENSEMBLE::SUB"
+    eval_var              match: op==invokeStk{1,4} AND slot 0 LITERAL "eval" AND slot 1 VAR
+    eval_brackets         match: op==invokeStk{1,4} AND slot 0 LITERAL "eval" AND slot 1 EXPR invoke_result
+    uplevel_var           match: op==invokeStk{1,4} AND slot 0 LITERAL "uplevel" AND last slot VAR
+    interp_eval           match: op==invokeStk{1,4} AND slot 0 LITERAL "interp" AND slot 1 LITERAL "eval"
+    var_method            match: op==invokeStk{1,4} AND slot 0 VAR AND slot 1 VAR
+    var_command           match: op==invokeStk{1,4} AND slot 0 VAR AND N==1   # §13.5
+    pattern_b             match: op==invokeStk{1,4} AND slot 0 VAR AND slot 1 LITERAL
+    pattern_a2            match: op==invokeStk{1,4} AND slot 0 LITERAL "::ns" (single-segment FQN) AND slot 1 LITERAL
+    pattern_a             match: op==invokeStk{1,4} AND slot 0 LITERAL (fallback)
 ```
 
 The `_sub_table_b_heuristic` proc at P1.1 walker.tcl:496-511 is
@@ -470,13 +487,46 @@ intentional. Avoids spurious `unrecognized` for the `$var` no-args
 case that v1 SPEC §4.3 + v1 TestUnresolvedDispatch lock as a
 distinct category.
 
-**§13.6 computed_namespace row** (resolved DECIDED=C, supersedes §5
-decision 6): when `invokeReplace` fires with the resolved literal
-slot being VAR (computed namespace), emit a distinct
-`computed_namespace` event. Counts as recognized, so the §8
-"0 unrecognized" gate is preserved. Mirrors the eval_var /
-uplevel_var / interp_eval pattern of explicit-tag-instead-of-
-silently-classify for runtime-resolved dispatch.
+**§13.6 C-2 split** (P1.3 Stream 3, USER-DECIDED): the prior
+single broad `computed_namespace` predicate (priority 12.5,
+falling through to `pattern_a`) is **superseded** by two
+distinct invokeReplace-routed dispatch rows fired BEFORE
+`namespace_eval`:
+
+* **`computed_namespace` row** (Shape A) catches
+  `namespace eval $var BODY`. Predicate: op==invokeReplace AND
+  last slot LITERAL=="::tcl::namespace::eval" AND at least one
+  interior slot is VAR. Emits `kind=computed_namespace` consumed
+  by the bridge driver's existing
+  `eval_var/interp_eval/var_command/computed_namespace`
+  unresolved-family handler (no new dispatch branch needed).
+
+  Empirical citations from `/usr/share/tcltk/tcllib1.21`:
+  - `dns/dns.tcl` — `namespace eval ::dns::$id { ... }`.
+  - `oo/build.tcl` — `namespace eval $ns { ... }`.
+  - `tk8.6/iconlist.tcl` and similar — `namespace eval [info object namespace $obj] { ... }`.
+
+* **`ensemble_fqn_rewrite` row** (Shape B) catches stock
+  ensembles routed via invokeReplace. Predicate: op==invokeReplace
+  AND last slot LITERAL matches `^::tcl::(array|binary|chan|
+  clock|dict|encoding|file|info|namespace|string)::SUB$` AND last
+  slot != "::tcl::namespace::eval". Emits `kind=ensemble`
+  (NOT a new kind) so the bridge driver's existing ensemble
+  handler runs unchanged — downstream consumer parity with
+  invokeStk-routed ensembles is the explicit design goal.
+  Events carry `bytecode_form=invokeReplace` for audit signal.
+
+  Empirical citations from `/usr/share/tcltk/tcllib1.21`:
+  - `clock/rfc2822.tcl:211` — `clock format [parse_date ...]`
+    compiles to `invokeReplace 3 2` with `::tcl::clock::format`.
+  - `clock/rfc2822.tcl:213` — same shape.
+  - many `dict for / dict update / dict with` sites in the
+    tcllib clay/oometa/sqlite modules.
+
+  Both rows count as recognized, so the §8 "0 unrecognized" gate
+  is preserved. Cross-codebase recognition rate improved from
+  **39 unrecognized / 14,215 events** on `/usr/share/tcltk`
+  baseline to **0 unrecognized / 14,187 events** after Stream 3.
 
 ---
 
@@ -695,6 +745,15 @@ the 2/12,010 unrecognized cases dissolve into specific events.
   reach +150 with comments. The hard cap is removed per
   PATCH §3 P1.2; +85 was an underestimate but still inside
   the 900-1200 soft target for the bridge as a whole.
+- **LoC band (post-P1.3 bundle)**: bridge driver soft target
+  ≤1600 LoC typical; >1600 requires written rationale. Total
+  bridge layer (driver + JSON + post-passes + recursion_tables +
+  body_base + walker + parser + unresolved + pragma) is
+  **informational, not gated**; reduction from v1's 1925 LoC is
+  meaningful at any aggregate under ~5000. Cap was loosened
+  from 1500 → 1600 post-P1.3-bundle to accommodate the CRITICAL #0
+  body-recursion fix + dispatch_c B refactor + dual-validate
+  scaffolding (~120 LoC of load-bearing logic).
 
 ---
 
@@ -879,8 +938,11 @@ This rev2 contract addresses the omc:critic REVISE pass:
 | §13.2 / §13.3 (rev4 user-decided=B) host-only fields | `parent_classes` only on class symbols; `package_requires` only on `__script__`. Δ0.2 C3 always-present rule applies WITHIN host type; non-host symbols don't carry the field. |
 | §13.5 (rev4 user-decided=A) `var_command` distinct row | §3.3 row added at priority 10.5 (slot 0 VAR AND N==1); §2 event payload schema gains `var_command` row. v1 SPEC §4.3 + v1 TestUnresolvedDispatch preserved. |
 | §13.6 (rev4 user-decided=C) `computed_namespace` distinct event kind | §3.3 row added at priority 12.5 (invokeReplace + last slot != LITERAL); §2 schema gains `computed_namespace` row. Replaces §5 decision-6 fallthrough-to-pattern_a default; counts as recognized so §8 gate stays clean. |
+| §13.6 (rev5 P1.3 Stream 3, USER-DECIDED C-2 split) two distinct invokeReplace dispatch rows | §3.3 split into two rows at priorities 1 + 2 (above `namespace_eval`): `computed_namespace` (Shape A — last slot LITERAL "::tcl::namespace::eval" AND interior VAR; emits `kind=computed_namespace`) and `ensemble_fqn_rewrite` (Shape B — last slot LITERAL `^::tcl::ENS::SUB$` AND ENS in 10-row ensemble table AND last slot != "::tcl::namespace::eval"; emits `kind=ensemble` for downstream consumer parity with invokeStk-routed ensembles + carries `bytecode_form=invokeReplace` for audit). Cross-codebase corpus recognition rate on /usr/share/tcltk improved from 39 unrecognized / 14,215 events (baseline) to 0 unrecognized / 14,187 events. Bridge driver's `_dispatch_event` consumes both kinds via existing handlers — zero new dispatch branches required. |
+| Tier 2 `_ensure_tier2_loaded` path-resolution fix (P1.3 Stream 3) | `[info script]` was empty when called from a top-level tclsh proc, so the lazy-load of `validation/probes/INSTRUCTION_TABLE_8_6_14.tcl` silently no-op'd and 39 stock-Tcl-known opcodes (strneq/arrayExistsStk/add/sub/etc.) cascaded as `unrecognized`. Walker now captures `[file dirname [file normalize [info script]]]` AT SOURCE TIME into `::jcm::disasm::walker::_WALKER_DIR` and uses that constant inside `_ensure_tier2_loaded`. The instruction table's namespace-eval init also became guarded so `opcode_coverage_probe.tcl`'s table-first source order doesn't get clobbered. |
 | §13.7 (rev4 user-decided=A) `superclass` per-occurrence attribution | `parent_classes` carries one `{name, line}` per source-form occurrence; multi-site TclOO `superclass` declarations preserve every site's line. iTcl `inherit Base1 Base2` already produces one entry per Base. |
 | Worker 2 `__file_offset__` tag (rev4 user-decided=keep) | Recursion-table handlers return `{__file_offset__ N}` tagged tuples; Worker 3b bridge driver resolves via line_map post-pass (one O(n) walk after dispatch). Module boundary preserved: handlers stay pure, line_map ownership stays with bridge driver. |
 | NG-5 (rev5 cross-codebase) unknown_opcode cascade prevention | §3.1.4 extended: unknown_opcode now triggers same boundary recovery as stack_underflow + dead-code (reset stack + suppress until next startCommand). Empirically verified on /usr/share/tcltk: 40 clean per-opcode unrecognized events across 14,215 walker events; no cascade noise. |
 | NG-6 (rev5 cross-codebase) corpus probe generalized for non-bluice codebases | `--root PATH` flag (no scope filter; recursive .tcl/.itcl walk) added to `validation/probes/p1_2_corpus_recognition_probe.tcl`; `--bluice-root` retained as back-compat alias for the existing scope filter. Per-opcode breakdown sorted by frequency (with file count + first-sample) replaces the bare first-10 triage list. Tells maintainers exactly which STACK_EFFECTS rows to add to support a new codebase. |
 | Open: corpus gate strictness for orphan_pc / stack_underflow / unknown_opcode | §8 recognition-gate strictness clarification (counts all 4 cases) |
+| Walker-orphan opcode identification (P1.3 bundle, post-Stream-3) | `opcode_coverage_probe.tcl` reports `Walker rows orphaned vs Tcl table: 1`; the lone orphan is `pushString` (NOT `clockRead`, which is a Tier-1 hand-classified row that DOES correspond to a Tcl-table entry). `pushString` lives in `STACK_EFFECTS` because the walker treats certain literal-pool string-push paths as Tier-1, while `tclInstructionTable[]` surfaces the mainline metadata under a different opcode name; intentional, documented inline in `opcode_walker.tcl` at the row. |

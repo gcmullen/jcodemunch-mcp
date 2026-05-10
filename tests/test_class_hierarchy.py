@@ -1,4 +1,24 @@
-"""Tests for get_class_hierarchy tool (T13)."""
+"""Tests for get_class_hierarchy tool (T13).
+
+Two extraction paths are exercised here, scoped by the data each parser
+produces:
+
+  - Tcl class symbols carry parent_classes via the jcm_tcl_extensions
+    side-table (populated by the Tcl bridge).  See
+    test_storage_jcm_tcl_extensions.py for round-trip + Strict-A load
+    coverage.
+
+  - Other languages (Python / JS / Java / C# / Ruby / Go / ...) encode
+    inheritance in the symbol's signature string; _parse_bases() extracts
+    base names via regex.  These tests exercise that cross-language path
+    against a Python-class fixture (hierarchy_index conftest fixture).
+
+Both paths are correct for their language scope and live behind a single
+_get_bases() dispatch in get_class_hierarchy.py.  Removing _parse_bases
+would silently regress class-hierarchy on every non-Tcl language we
+support — that is NOT what the P1.3 "failures rather than fallbacks"
+directive called for.
+"""
 
 import pytest
 from jcodemunch_mcp.tools.get_class_hierarchy import get_class_hierarchy, _parse_bases

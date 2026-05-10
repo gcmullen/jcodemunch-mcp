@@ -21,7 +21,12 @@ from .sqlite_store import SQLiteIndexStore, _VERIFIED_PATHS
 logger = logging.getLogger(__name__)
 
 # Bump this when the index schema changes in an incompatible way.
-INDEX_VERSION = 10
+#
+# This is the UPSTREAM-COMPATIBLE schema axis — bumped only in lockstep
+# with upstream so that fork-built and upstream-built DBs stay
+# load-compatible at this layer.  Fork-only Tcl-bridge extension data
+# tracks on a separate axis: see JCM_TCL_INDEX_VERSION in sqlite_store.py.
+INDEX_VERSION = 9
 
 
 @functools.lru_cache(maxsize=16)
@@ -880,7 +885,7 @@ class IndexStore:
 
     def _symbol_to_dict(self, symbol: Symbol) -> dict:
         """Convert Symbol to dict (without source content)."""
-        return {
+        d = {
             "id": symbol.id,
             "file": symbol.file,
             "name": symbol.name,
@@ -903,6 +908,15 @@ class IndexStore:
             "param_count": getattr(symbol, "param_count", 0) or 0,
             "call_references": getattr(symbol, "call_references", []) or [],
         }
+        # Fork-extension fields — only populate when non-empty so the in-
+        # memory shape mirrors the load path (architect CRITICAL #1).
+        pc = getattr(symbol, "parent_classes", None) or []
+        if pc:
+            d["parent_classes"] = pc
+        pr = getattr(symbol, "package_requires", None) or []
+        if pr:
+            d["package_requires"] = pr
+        return d
 
     def _index_to_dict(self, index: CodeIndex) -> dict:
         """Convert CodeIndex to dict."""

@@ -228,6 +228,226 @@ class TestGetCallHierarchy:
 
 
 # ---------------------------------------------------------------------------
+# get_call_hierarchy inheritance-aware traversal
+# ---------------------------------------------------------------------------
+
+class TestGetCallHierarchyInheritance:
+    """Inheritance-aware caller/callee resolution.
+
+    When a method is queried, calls to the same-named method on kin
+    classes (ancestors + descendants via the dual-path get_bases
+    dispatch) are merged into the result and tagged with an
+    ``inheritance_via`` field.
+
+    Cross-language: works for Tcl (side-table parent_classes) and for
+    other languages (signature-derived bases) without special-casing.
+    """
+
+    def _build_python_oo_repo(self, tmp_path):
+        """Build a Python repo with class hierarchy and method overrides."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        src.mkdir(); store.mkdir()
+        (src / "animals.py").write_text(
+            "class Animal:\n"
+            "    def speak(self):\n"
+            "        return 'generic'\n\n"
+            "class Mammal(Animal):\n"
+            "    def speak(self):\n"
+            "        return 'mammal'\n\n"
+            "class Dog(Mammal):\n"
+            "    def speak(self):\n"
+            "        return 'woof'\n"
+        )
+        (src / "callers.py").write_text(
+            "from animals import Animal, Mammal, Dog\n\n"
+            "def call_animal(a: Animal):\n"
+            "    return a.speak()\n\n"
+            "def call_mammal(m: Mammal):\n"
+            "    return m.speak()\n\n"
+            "def call_dog(d: Dog):\n"
+            "    return d.speak()\n"
+        )
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+        return result["repo"], str(store)
+
+    def _resolve_method_id(self, store_path, repo, class_name, method_name):
+        """Look up a method's symbol ID by class+method name."""
+        from jcodemunch_mcp.storage import IndexStore
+        owner, name = repo.split("/", 1)
+        idx = IndexStore(base_path=store_path).load_index(owner, name)
+        sym_idx = getattr(idx, "_symbol_index", {})
+        # Find the class symbol id, then methods whose parent matches.
+        class_id = None
+        for s in idx.symbols:
+            if s.get("name") == class_name and s.get("kind") in ("class", "type"):
+                class_id = s.get("id")
+                break
+        assert class_id is not None
+        for s in idx.symbols:
+            if (
+                s.get("name") == method_name
+                and s.get("parent") == class_id
+                and s.get("kind") in ("method", "function")
+            ):
+                return s.get("id")
+        raise AssertionError(f"method {class_name}.{method_name} not found")
+
+    def test_python_method_descendants_appear_as_callers(self, tmp_path):
+        """Querying Animal.speak's callers includes callers of Dog.speak."""
+        repo, store = self._build_python_oo_repo(tmp_path)
+        animal_speak_id = self._resolve_method_id(store, repo, "Animal", "speak")
+        result = get_call_hierarchy(
+            repo=repo, symbol_id=animal_speak_id, direction="callers",
+            depth=2, storage_path=store,
+        )
+        assert "error" not in result
+        caller_names = {c["name"] for c in result["callers"]}
+        # All three call sites must surface — runtime dispatch could land
+        # on Animal.speak via any of them.
+        assert "call_animal" in caller_names
+        assert "call_mammal" in caller_names
+        assert "call_dog" in caller_names
+        # Inheritance metadata exposed via _meta.inheritance_aliases
+        alias_classes = {a["class"] for a in result["_meta"]["inheritance_aliases"]}
+        assert {"Mammal", "Dog"} <= alias_classes
+
+    def test_python_no_inheritance_unchanged(self, tmp_path):
+        """Method on a class with no kin: behaviour is unchanged."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        src.mkdir(); store.mkdir()
+        (src / "lone.py").write_text(
+            "class Solo:\n"
+            "    def act(self):\n"
+            "        return 1\n"
+        )
+        (src / "use.py").write_text(
+            "from lone import Solo\n\n"
+            "def runner():\n"
+            "    return Solo().act()\n"
+        )
+        idx = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert idx["success"] is True
+
+        solo_act_id = self._resolve_method_id(str(store), idx["repo"], "Solo", "act")
+        result = get_call_hierarchy(
+            repo=idx["repo"], symbol_id=solo_act_id, direction="callers",
+            depth=2, storage_path=str(store),
+        )
+        assert "error" not in result
+        assert result["_meta"]["inheritance_aliases"] == []
+        # No inheritance_via tag on any caller
+        for c in result["callers"]:
+            assert "inheritance_via" not in c
+
+    def test_non_method_symbol_unchanged(self, tmp_path):
+        """Module-level function: no inheritance traversal, no metadata."""
+        repo, store = _build_repo(tmp_path)  # the helper/process/handle/run repo
+        result = get_call_hierarchy(
+            repo=repo, symbol_id="helper", storage_path=store,
+        )
+        assert "error" not in result
+        assert result["_meta"]["inheritance_aliases"] == []
+
+    def test_tcl_method_inheritance_traversal(self, tmp_path):
+        """Tcl path: side-table parent_classes drive kin walking."""
+        from jcodemunch_mcp.parser.symbols import Symbol
+        from jcodemunch_mcp.storage import IndexStore
+
+        store_path = tmp_path / "store"
+        store_path.mkdir()
+        store = IndexStore(base_path=str(store_path))
+
+        animals_file = "src/animals.tcl"
+        callers_file = "src/callers.tcl"
+
+        # Two Tcl classes, each with a `speak` method.  Dog extends Animal
+        # via the side-table parent_classes shape.
+        animal_class = Symbol(
+            id=f"{animals_file}::Animal#class",
+            file=animals_file, name="Animal", qualified_name="Animal",
+            kind="class", language="tcl", signature="oo::class create Animal",
+            line=1, end_line=10,
+            parent_classes=[],
+        )
+        animal_speak = Symbol(
+            id=f"{animals_file}::Animal::speak#method",
+            file=animals_file, name="speak", qualified_name="Animal::speak",
+            kind="method", language="tcl", signature="method speak {}",
+            line=2, end_line=5,
+            parent=f"{animals_file}::Animal#class",
+        )
+        dog_class = Symbol(
+            id=f"{animals_file}::Dog#class",
+            file=animals_file, name="Dog", qualified_name="Dog",
+            kind="class", language="tcl", signature="oo::class create Dog",
+            line=12, end_line=20,
+            parent_classes=[{"name": "Animal", "line": 12}],
+        )
+        dog_speak = Symbol(
+            id=f"{animals_file}::Dog::speak#method",
+            file=animals_file, name="speak", qualified_name="Dog::speak",
+            kind="method", language="tcl", signature="method speak {}",
+            line=14, end_line=17,
+            parent=f"{animals_file}::Dog#class",
+        )
+        # A caller proc that invokes speak() — picked up by text heuristic.
+        caller_proc = Symbol(
+            id=f"{callers_file}::call_dog#function",
+            file=callers_file, name="call_dog", qualified_name="call_dog",
+            kind="function", language="tcl",
+            signature="proc call_dog {d} { $d speak }",
+            line=1, end_line=3,
+            call_references=["speak"],
+        )
+
+        # raw_files content must mention the method name so text heuristic
+        # picks up the caller_proc body when AST data is absent.
+        raw_files = {
+            animals_file: (
+                "oo::class create Animal {\n"
+                "    method speak {} { return generic }\n"
+                "}\n\n"
+                "oo::class create Dog {\n"
+                "    superclass Animal\n"
+                "    method speak {} { return woof }\n"
+                "}\n"
+            ),
+            callers_file: (
+                "proc call_dog {d} { $d speak }\n"
+            ),
+        }
+
+        store.save_index(
+            owner="local",
+            name="tcloo",
+            source_files=[animals_file, callers_file],
+            symbols=[animal_class, animal_speak, dog_class, dog_speak, caller_proc],
+            raw_files=raw_files,
+            languages={"tcl": 2},
+            file_languages={animals_file: "tcl", callers_file: "tcl"},
+            source_root=str(tmp_path),
+            imports={},
+        )
+
+        # Query Animal.speak's callers.  With inheritance traversal,
+        # call_dog must surface (it calls Dog.speak which is kin to
+        # Animal.speak), with the inheritance_via tag set.
+        result = get_call_hierarchy(
+            repo="local/tcloo",
+            symbol_id=f"{animals_file}::Animal::speak#method",
+            direction="callers",
+            depth=1,
+            storage_path=str(store_path),
+        )
+        assert "error" not in result, result.get("error")
+        alias_classes = {a["class"] for a in result["_meta"]["inheritance_aliases"]}
+        assert "Dog" in alias_classes
+
+
+# ---------------------------------------------------------------------------
 # get_impact_preview integration tests
 # ---------------------------------------------------------------------------
 

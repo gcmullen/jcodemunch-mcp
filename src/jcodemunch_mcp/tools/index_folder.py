@@ -1385,10 +1385,11 @@ def index_folder(
             else:
                 full_context_metadata = profile_meta
 
-        # Extract package names from manifest files
+        # Extract package names from manifest files (and indexed __script__
+        # symbols for Tcl, which has no manifest format).
         _pkg_names: list[str] = []
         try:
-            _pkg_names = _extract_package_names(str(folder_path))
+            _pkg_names = _extract_package_names(str(folder_path), symbols=all_symbols)
         except Exception:
             logger.debug("extract_package_names failed for %s", folder_path, exc_info=True)
 

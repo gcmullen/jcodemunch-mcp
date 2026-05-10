@@ -9057,10 +9057,33 @@ def _parse_nim_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
 # per PLAN_v2.1 §0.2 rule 1 (single extraction substrate); there is NO
 # fallback. If tclsh is not installed, parsing fails with installation
 # instructions for Debian/Ubuntu, RHEL/Fedora, and macOS.
+#
+# P1.3 bundle (12) — JCODEMUNCH_TCL_DUAL_VALIDATE
+# -----------------------------------------------
+# Cut-over policy is C″ (USER-DECIDED): the runtime path is single-substrate
+# new-bridge only. The old (v1.x) bridge stays on the `tcl-native-parser`
+# branch and is NOT in tree. To support oracle-building during P1.4 — i.e.,
+# surfacing where v1.x and v2.x disagree on real bluice / tcllib files —
+# the env var `JCODEMUNCH_TCL_DUAL_VALIDATE=1` enables an opt-in
+# diagnostic-only second parse:
+#
+#   1. New bridge produces the canonical symbol list (returned to caller).
+#   2. Legacy bridge is materialised once via
+#        git show tcl-native-parser:src/jcodemunch_mcp/parser/tcl_parser_bridge.tcl
+#      to a process-cached temp file, then run on the same source.
+#   3. Per-symbol presence / absence + shape divergence is computed and
+#      logged to ~/.code-index/dual_validate_diffs/<filename>.json.
+#   4. Legacy bridge failures are recorded in the diff but do NOT crash
+#      the new-bridge canonical path — the comparison is the diagnostic,
+#      not the runtime.
+#
+# This stays OFF by default. The Phase 2 hand-off doc references it as the
+# oracle-building hook (SPEC_v2 §12.7).
 # ---------------------------------------------------------------------------
 
 import json as _json
 import logging as _logging
+import os as _os_module
 import shutil as _shutil
 import subprocess as _subprocess
 import tempfile as _tempfile
@@ -9069,6 +9092,129 @@ from pathlib import Path as _Path
 _tcl_logger = _logging.getLogger(__name__)
 _TCL_BRIDGE_SCRIPT = str(_Path(__file__).parent / "tcl_disasm_bridge.tcl")
 _tclsh_path: "str | None | bool" = False  # False = not yet checked
+
+# Dual-validate cache: legacy bridge content fetched once per process via
+# `git show`; subsequent calls reuse the cached file. None = unattempted;
+# False = attempted-and-failed (don't retry); str = path on disk.
+_legacy_bridge_path: "str | None | bool" = None
+
+
+def _dual_validate_enabled() -> bool:
+    """Return True iff `JCODEMUNCH_TCL_DUAL_VALIDATE` is set to a truthy value."""
+    return _os_module.environ.get(
+        "JCODEMUNCH_TCL_DUAL_VALIDATE", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _materialise_legacy_bridge() -> "str | None":
+    """Fetch the v1.x bridge from `tcl-native-parser` to a cached temp file.
+
+    Returns the path on success; None on failure (also caches False so
+    subsequent calls don't repeat the failed `git show`).
+    """
+    global _legacy_bridge_path
+    if _legacy_bridge_path is False:
+        return None
+    if isinstance(_legacy_bridge_path, str):
+        return _legacy_bridge_path
+    repo_root = _Path(__file__).resolve().parents[3]
+    try:
+        result = _subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "show",
+                "tcl-native-parser:src/jcodemunch_mcp/parser/tcl_parser_bridge.tcl",
+            ],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            _tcl_logger.warning(
+                "JCODEMUNCH_TCL_DUAL_VALIDATE: legacy bridge unavailable "
+                "(git show failed rc=%s)",
+                result.returncode,
+            )
+            _legacy_bridge_path = False
+            return None
+        cache_dir = _Path(_tempfile.gettempdir()) / "jcm_dual_validate"
+        cache_dir.mkdir(exist_ok=True)
+        cache_path = cache_dir / "tcl_parser_bridge_v1.tcl"
+        cache_path.write_bytes(result.stdout)
+        _legacy_bridge_path = str(cache_path)
+        return _legacy_bridge_path
+    except (OSError, _subprocess.TimeoutExpired) as exc:
+        _tcl_logger.warning(
+            "JCODEMUNCH_TCL_DUAL_VALIDATE: legacy bridge fetch failed: %s",
+            exc,
+        )
+        _legacy_bridge_path = False
+        return None
+
+
+def _run_legacy_bridge(tmp_path: str, tclsh: str, timeout: int) -> "list | None":
+    """Run the legacy bridge on the temp source file. Returns parsed JSON
+    list on success; None on any failure (legacy crash is the diagnostic,
+    not the path)."""
+    legacy = _materialise_legacy_bridge()
+    if legacy is None:
+        return None
+    try:
+        result = _subprocess.run(
+            [tclsh, legacy, tmp_path],
+            capture_output=True,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            return None
+        raw = result.stdout.decode("utf-8", errors="replace")
+        if not raw.strip():
+            return []
+        return _json.loads(raw)
+    except (OSError, _subprocess.TimeoutExpired, _json.JSONDecodeError):
+        return None
+
+
+def _emit_dual_validate_diff(
+    filename: str, new_entries: list, legacy_entries: "list | None"
+) -> None:
+    """Write a JSON diff under ~/.code-index/dual_validate_diffs/."""
+    diff_dir = _Path.home() / ".code-index" / "dual_validate_diffs"
+    try:
+        diff_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _tcl_logger.debug("dual_validate diff dir create failed: %s", exc)
+        return
+
+    new_qns = {(e.get("qualified_name", ""), e.get("kind", "")) for e in new_entries}
+    legacy_qns = (
+        {
+            (e.get("qualified_name", e.get("qualified", "")), e.get("kind", ""))
+            for e in legacy_entries
+        }
+        if legacy_entries is not None
+        else set()
+    )
+    only_new = sorted(new_qns - legacy_qns)
+    only_legacy = sorted(legacy_qns - new_qns)
+    common = sorted(new_qns & legacy_qns)
+
+    diff = {
+        "file": filename,
+        "legacy_bridge_ran": legacy_entries is not None,
+        "new_symbol_count": len(new_entries),
+        "legacy_symbol_count": len(legacy_entries) if legacy_entries is not None else None,
+        "only_in_new": [{"qualified_name": q, "kind": k} for q, k in only_new],
+        "only_in_legacy": [{"qualified_name": q, "kind": k} for q, k in only_legacy],
+        "common_count": len(common),
+    }
+    safe_name = filename.replace("/", "_").replace("\\", "_")
+    out_path = diff_dir / f"{safe_name}.json"
+    try:
+        out_path.write_text(_json.dumps(diff, indent=2))
+    except OSError as exc:
+        _tcl_logger.debug("dual_validate diff write failed: %s", exc)
 
 
 def _tcl_install_instructions(detail: str) -> str:
@@ -9085,10 +9231,25 @@ def _tcl_install_instructions(detail: str) -> str:
 
 
 def _find_tclsh() -> "str | None":
-    """Find tclsh on PATH, caching the result."""
+    """Find tclsh on PATH, caching the result.
+
+    Also verifies that the bundled bridge script exists on disk; an
+    intact tclsh installation is useless if the bridge script went
+    missing in a packaging failure (wheel build, sparse checkout, etc.).
+    The check runs once per process — the cached _tclsh_path short-
+    circuits subsequent calls.
+    """
     global _tclsh_path
     if _tclsh_path is not False:
         return _tclsh_path  # type: ignore[return-value]
+    if not _Path(_TCL_BRIDGE_SCRIPT).is_file():
+        # Surface as a hard error: the parser cannot recover from a
+        # missing bridge script. Cache None so we don't re-stat on every
+        # subsequent TCL file.
+        _tclsh_path = None
+        raise RuntimeError(_tcl_install_instructions(
+            f"bridge script missing at {_TCL_BRIDGE_SCRIPT}"
+        ))
     _tclsh_path = _shutil.which("tclsh")
     if _tclsh_path is None:
         _tcl_logger.debug("tclsh not found on PATH; TCL native parser unavailable")
@@ -9111,6 +9272,14 @@ def _parse_tcl_native(source_bytes: bytes, filename: str) -> "list[Symbol]":
         raise RuntimeError(_tcl_install_instructions("tclsh not in PATH"))
 
     import os as _os
+    # Per-call timeout, overridable via JCODEMUNCH_TCL_PARSE_TIMEOUT (seconds).
+    # Default 30s matches the historical hard-coded value; bumping it covers
+    # large generated TCL files (e.g. CAD/lithography vendor scripts) that
+    # blow past the default disasm budget without corrupting tclsh state.
+    try:
+        _tcl_timeout = int(_os.environ.get("JCODEMUNCH_TCL_PARSE_TIMEOUT", "30"))
+    except ValueError:
+        _tcl_timeout = 30
     tmp_path = None
     try:
         tmp_fd, tmp_path = _tempfile.mkstemp(suffix=".tcl", prefix="jcm_tcl_")
@@ -9122,7 +9291,7 @@ def _parse_tcl_native(source_bytes: bytes, filename: str) -> "list[Symbol]":
         result = _subprocess.run(
             [tclsh, _TCL_BRIDGE_SCRIPT, tmp_path],
             capture_output=True,
-            timeout=30,
+            timeout=_tcl_timeout,
         )
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
@@ -9132,11 +9301,23 @@ def _parse_tcl_native(source_bytes: bytes, filename: str) -> "list[Symbol]":
 
         raw_json = result.stdout.decode("utf-8", errors="replace")
         if not raw_json.strip():
-            return []
-        entries = _json.loads(raw_json)
+            entries = []
+        else:
+            entries = _json.loads(raw_json)
+        # P1.3 bundle (12) — dual-validate hook (opt-in, diagnostic-only).
+        # New-bridge `entries` is the canonical answer; we run the legacy
+        # bridge in parallel and log the diff so P1.4 can build the
+        # behavioral oracle.
+        if _dual_validate_enabled():
+            try:
+                legacy_entries = _run_legacy_bridge(tmp_path, tclsh, _tcl_timeout)
+                _emit_dual_validate_diff(filename, entries, legacy_entries)
+            except Exception as exc:  # noqa: BLE001 — diagnostic must never crash
+                _tcl_logger.debug("dual_validate diagnostic failed: %s", exc)
     except _subprocess.TimeoutExpired:
         raise RuntimeError(_tcl_install_instructions(
-            f"tcl_disasm_bridge.tcl exceeded 30s timeout for {filename}"
+            f"tcl_disasm_bridge.tcl exceeded {_tcl_timeout}s timeout for "
+            f"{filename}; raise via JCODEMUNCH_TCL_PARSE_TIMEOUT env var"
         ))
     except (_json.JSONDecodeError, OSError) as exc:
         raise RuntimeError(_tcl_install_instructions(

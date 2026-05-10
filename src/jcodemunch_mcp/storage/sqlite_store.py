@@ -125,6 +125,16 @@ _META_KEYS = [
     "languages", "context_metadata",
 ]
 
+# Fork-extension axis (architect-locked decisions C+D):
+# - INDEX_VERSION (above) tracks the upstream-compatible schema axis (lockstep
+#   with upstream).  Bumped only when the SHARED schema changes.
+# - JCM_TCL_INDEX_VERSION tracks fork-only (Tcl-bridge) extension data,
+#   stored in the side-table jcm_tcl_extensions and surfaced via the meta
+#   key `jcm_tcl_writer_version`.  Bumped when the side-table shape changes.
+JCM_TCL_INDEX_VERSION = 1
+
+_JCM_TCL_WRITER_VERSION_KEY = "jcm_tcl_writer_version"
+
 # Lazily initialised to avoid circular import with index_store.
 # None = not yet loaded; any accidental read before _ensure_index_store_deps()
 # fires raises TypeError("'>' not supported between 'NoneType' and 'int'").
@@ -138,6 +148,72 @@ def _ensure_index_store_deps() -> None:
         from .index_store import INDEX_VERSION, _file_hash as _fh
         _INDEX_VERSION = INDEX_VERSION
         _file_hash = _fh
+
+
+# ── Fork-extension side-table (jcm_tcl_extensions) ────────────────────
+# Per architect-locked design (CRITICAL #2): create the side-table via
+# per-call CREATE TABLE IF NOT EXISTS, NOT via _SCHEMA_SQL, so the
+# _initialized_dbs cache cannot mask out-of-band drops or partial-mount
+# corruption.  This mirrors the pattern in embedding_store.py.
+
+def _initialize_jcm_tcl_extensions(conn: sqlite3.Connection) -> None:
+    """Idempotently create the jcm_tcl_extensions side-table on this connection.
+
+    Hybrid columns (architect adjustment): typed columns for the stable
+    fields parent_classes / package_requires, plus extras_json as the
+    Phase-2 prototype escape valve.
+
+    Stamps meta.jcm_tcl_writer_version so cross-direction loads can detect
+    fork-extension version mismatches.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS jcm_tcl_extensions (
+            symbol_id        TEXT PRIMARY KEY,
+            parent_classes   TEXT,
+            package_requires TEXT,
+            extras_json      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_jcm_tcl_extensions_symbol
+            ON jcm_tcl_extensions(symbol_id);
+        """
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        (_JCM_TCL_WRITER_VERSION_KEY, str(JCM_TCL_INDEX_VERSION)),
+    )
+
+
+def _jcm_tcl_extension_row(symbol: "Symbol") -> Optional[tuple]:
+    """Build the side-table row tuple for a Symbol, or None if no data to store.
+
+    Skipping rows with empty fields keeps the side-table sparse — only
+    Tcl class symbols (parent_classes) and Tcl __script__ symbols
+    (package_requires) typically have data.
+    """
+    parent_classes = getattr(symbol, "parent_classes", None) or []
+    package_requires = getattr(symbol, "package_requires", None) or []
+    if not parent_classes and not package_requires:
+        return None
+    return (
+        symbol.id,
+        json.dumps(parent_classes) if parent_classes else None,
+        json.dumps(package_requires) if package_requires else None,
+        None,  # extras_json — reserved for Phase-2 prototype fields
+    )
+
+
+def _has_jcm_tcl_extensions_table(conn: sqlite3.Connection) -> bool:
+    """Check whether jcm_tcl_extensions exists on this DB.
+
+    Used by the load path to skip the LEFT JOIN cleanly when running
+    fork code against an upstream-built v9 DB (architect CRITICAL #3).
+    """
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='jcm_tcl_extensions' LIMIT 1"
+    ).fetchone()
+    return row is not None
 
 
 # ── In-memory CodeIndex cache ──────────────────────────────────────
@@ -296,24 +372,6 @@ def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
-    """Migrate a v9 database to v10: TCL bridge adds parent_classes + package_requires.
-
-    These fields are stored in each symbol's JSON ``data`` column (no new SQL
-    columns) and are therefore schema-forward-compatible for non-TCL repos.
-    TCL repos must re-index to populate the new fields; old TCL indexes are
-    still loadable but will lack parent_classes / package_requires data.
-    """
-    conn.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-        ("index_version", "10"),
-    )
-    logger.info(
-        "Migrated v9→v10: TCL bridge schema additions (parent_classes, "
-        "package_requires). TCL repos should re-index to populate new fields."
-    )
-
-
 def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
     """Migrate a v8 database to v9: add branch_deltas and branch_meta tables."""
     # Create branch tables if they don't exist (idempotent)
@@ -434,8 +492,12 @@ class SQLiteIndexStore:
                     _migrate_v7_to_v8(conn)
                 if stored_version < 9:
                     _migrate_v8_to_v9(conn)
-                if stored_version < 10:
-                    _migrate_v9_to_v10(conn)
+                # Stamp the fork-extension key whenever any schema migration
+                # ran.  A migrated DB now satisfies the Strict-A load gate so
+                # callers don't have to reindex just because the DB pre-dates
+                # the fork's side-table (the table is created here; no Tcl data
+                # is present for non-Tcl repos, which is the accurate answer).
+                _initialize_jcm_tcl_extensions(conn)
 
             SQLiteIndexStore._initialized_dbs.add(db_key)
 
@@ -824,7 +886,15 @@ class SQLiteIndexStore:
         )
 
     def _symbol_to_dict_for_delta(self, symbol: "Symbol") -> dict:
-        """Convert a Symbol to a serializable dict for branch delta storage."""
+        """Convert a Symbol to a serializable dict for branch delta storage.
+
+        DEFERRED (per user-locked decision #3): branch-delta wire format
+        intentionally omits the fork-extension fields (parent_classes,
+        package_requires).  Wiring through save_branch_delta /
+        compose_branch_index is scheduled for v2.0.  See
+        test_branch_delta_does_not_carry_fork_extension_data — it locks
+        this deferral so it cannot silently change.
+        """
         return {
             "id": symbol.id, "file": symbol.file, "name": symbol.name,
             "kind": symbol.kind or "", "signature": symbol.signature or "",
@@ -875,20 +945,11 @@ class SQLiteIndexStore:
         if file_hashes is None:
             file_hashes = {fp: _file_hash(content) for fp, content in raw_files.items()}
 
-        # Serialize symbols
-        serialized_symbols = [
-            {"id": s.id, "file": s.file, "name": s.name, "qualified_name": s.qualified_name,
-             "kind": s.kind, "language": s.language, "signature": s.signature,
-             "docstring": s.docstring, "summary": s.summary, "decorators": s.decorators,
-             "keywords": s.keywords, "parent": s.parent, "line": s.line,
-             "end_line": s.end_line, "byte_offset": s.byte_offset,
-             "byte_length": s.byte_length, "content_hash": s.content_hash,
-             "cyclomatic": getattr(s, "cyclomatic", 0) or 0,
-             "max_nesting": getattr(s, "max_nesting", 0) or 0,
-             "param_count": getattr(s, "param_count", 0) or 0,
-             "call_references": getattr(s, "call_references", []) or []}
-            for s in symbols
-        ]
+        # Serialize symbols (delegates to _symbol_to_dict so the fork-extension
+        # fields parent_classes / package_requires are carried into the in-
+        # memory index returned by save_index — without this the post-save
+        # cache hit would return symbols missing those fields).
+        serialized_symbols = [self._symbol_to_dict(s) for s in symbols]
 
         # Compute languages from file_languages if not provided
         file_languages = file_languages or {}
@@ -925,11 +986,23 @@ class SQLiteIndexStore:
         conn = self._connect(db_path)
         try:
             conn.execute("BEGIN")
+            # Ensure the fork-extension side-table exists on every write —
+            # per architect CRITICAL #2, this MUST happen on every call so
+            # the _initialized_dbs cache cannot mask out-of-band drops.
+            _initialize_jcm_tcl_extensions(conn)
             conn.execute("DELETE FROM symbols")
             conn.execute("DELETE FROM files")
             conn.execute("DELETE FROM meta")
+            conn.execute("DELETE FROM jcm_tcl_extensions")
 
             self._write_meta(conn, index)
+            # Re-stamp the fork-extension writer version (DELETE FROM meta
+            # above wiped it; _initialize_jcm_tcl_extensions only stamps it
+            # on table creation).
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (_JCM_TCL_WRITER_VERSION_KEY, str(JCM_TCL_INDEX_VERSION)),
+            )
 
             # Insert symbols
             conn.executemany(
@@ -940,6 +1013,17 @@ class SQLiteIndexStore:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [self._symbol_to_row(s) for s in symbols],
             )
+
+            # Insert fork-extension side-table rows (sparse — only Tcl class +
+            # __script__ symbols typically have data)
+            ext_rows = [r for r in (_jcm_tcl_extension_row(s) for s in symbols) if r is not None]
+            if ext_rows:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO jcm_tcl_extensions "
+                    "(symbol_id, parent_classes, package_requires, extras_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    ext_rows,
+                )
 
             # Insert files (batch via executemany)
             conn.executemany(
@@ -1025,10 +1109,57 @@ class SQLiteIndexStore:
                 logger.warning("Index version %d > current %d for %s/%s", stored_version, _INDEX_VERSION, owner, name)
                 return None
 
+            # Fork-extension stamp gate (Strict-A, P1.3 close).
+            # Refuse to load any DB that doesn't carry the fork's
+            # jcm_tcl_writer_version meta stamp matching this build's
+            # JCM_TCL_INDEX_VERSION exactly.  Forces a fresh reindex on:
+            #   1. Indexes built by upstream code (no stamp at all)
+            #   2. Indexes built by a newer fork (stamp > our constant)
+            #   3. Indexes built by an older fork (stamp < our constant) —
+            #      schema may have changed; rebuild rather than risk silent
+            #      stale reads.
+            #
+            # Architectural justification: 100% accuracy + deterministic
+            # behavior; fork tools never read approximate or stale data.
+            # The `return None` matches the existing graceful-failure pattern
+            # at the version check above; callers (index_folder, watch loop)
+            # already re-index on None.
+            stored_jcm_tcl_raw = meta.get(_JCM_TCL_WRITER_VERSION_KEY)
+            if stored_jcm_tcl_raw is None:
+                logger.warning(
+                    "Index lacks jcm_tcl_writer_version meta stamp (built by "
+                    "upstream code or pre-side-table fork) for %s/%s. "
+                    "Refusing load; reindex with current fork code to "
+                    "populate fork-extension data.",
+                    owner, name,
+                )
+                return None
+            try:
+                stored_jcm_tcl = int(stored_jcm_tcl_raw)
+            except (TypeError, ValueError):
+                stored_jcm_tcl = -1
+            if stored_jcm_tcl != JCM_TCL_INDEX_VERSION:
+                logger.warning(
+                    "Index has jcm_tcl_writer_version=%s, expected %s for "
+                    "%s/%s. Refusing load; reindex with current fork code "
+                    "to align fork-extension schema.",
+                    stored_jcm_tcl_raw, JCM_TCL_INDEX_VERSION, owner, name,
+                )
+                return None
+
             symbol_rows = conn.execute("SELECT * FROM symbols").fetchall()
             file_rows = conn.execute("SELECT * FROM files").fetchall()
 
-            index = self._build_index_from_rows(meta, symbol_rows, file_rows, owner, name)
+            ext_rows: Optional[list] = None
+            if _has_jcm_tcl_extensions_table(conn):
+                ext_rows = conn.execute(
+                    "SELECT symbol_id, parent_classes, package_requires, extras_json "
+                    "FROM jcm_tcl_extensions"
+                ).fetchall()
+
+            index = self._build_index_from_rows(
+                meta, symbol_rows, file_rows, owner, name, ext_rows=ext_rows,
+            )
 
             # Warn if call references were not migrated (v7→v8 case)
             if meta.get("call_refs_missing") == "1":
@@ -1106,11 +1237,22 @@ class SQLiteIndexStore:
         conn = self._connect(db_path)
         try:
             conn.execute("BEGIN")
+            # Ensure the fork-extension side-table exists (architect CRITICAL #2).
+            _initialize_jcm_tcl_extensions(conn)
 
             # Delete symbols for changed + deleted files
             files_to_remove: set[str] = set(deleted_files) | set(changed_files)
             if files_to_remove:
                 placeholders = ",".join("?" * len(files_to_remove))
+                # Explicit cascade on jcm_tcl_extensions — PRAGMA foreign_keys
+                # is NOT set globally (architect MAJOR #4), so we must DELETE
+                # extension rows BEFORE the symbols delete to keep the side-
+                # table in sync.
+                conn.execute(
+                    f"DELETE FROM jcm_tcl_extensions WHERE symbol_id IN "
+                    f"(SELECT id FROM symbols WHERE file IN ({placeholders}))",
+                    tuple(files_to_remove),
+                )
                 conn.execute(f"DELETE FROM symbols WHERE file IN ({placeholders})", tuple(files_to_remove))
 
             # Preserve existing hash/mtime for changed files before deleting them
@@ -1139,6 +1281,24 @@ class SQLiteIndexStore:
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [self._symbol_to_row(s) for s in new_symbols],
                 )
+                # Refresh fork-extension rows for any of the new symbols that
+                # carry parent_classes / package_requires.  We DELETE first
+                # (the symbol IDs may already have stale rows from a prior
+                # parse on the same file) then INSERT only the rows with data.
+                new_sym_ids = [s.id for s in new_symbols]
+                placeholders = ",".join("?" * len(new_sym_ids))
+                conn.execute(
+                    f"DELETE FROM jcm_tcl_extensions WHERE symbol_id IN ({placeholders})",
+                    new_sym_ids,
+                )
+                ext_rows = [r for r in (_jcm_tcl_extension_row(s) for s in new_symbols) if r is not None]
+                if ext_rows:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO jcm_tcl_extensions "
+                        "(symbol_id, parent_classes, package_requires, extras_json) "
+                        "VALUES (?, ?, ?, ?)",
+                        ext_rows,
+                    )
 
             # Update file records for changed + new files
             changed_or_new = sorted(set(changed_files) | set(new_files))
@@ -1207,9 +1367,16 @@ class SQLiteIndexStore:
 
             # Always read meta (small). Only read all rows when no cached index to patch.
             meta = self._read_meta(conn)
+            all_ext_rows: Optional[list] = None
             if old_index is None:
                 all_symbol_rows = conn.execute("SELECT * FROM symbols").fetchall()
                 all_file_rows = conn.execute("SELECT * FROM files").fetchall()
+                # _initialize_jcm_tcl_extensions ran above so the table is
+                # guaranteed present here; always read it on the cold path.
+                all_ext_rows = conn.execute(
+                    "SELECT symbol_id, parent_classes, package_requires, extras_json "
+                    "FROM jcm_tcl_extensions"
+                ).fetchall()
             else:
                 all_symbol_rows = all_file_rows = None  # unused in patch path
 
@@ -1254,7 +1421,10 @@ class SQLiteIndexStore:
             )
         else:
             # Cold path: build from DB rows (no cached index available)
-            index = self._build_index_from_rows(meta, all_symbol_rows, all_file_rows, owner, name)
+            index = self._build_index_from_rows(
+                meta, all_symbol_rows, all_file_rows, owner, name,
+                ext_rows=all_ext_rows,
+            )
 
             # Carry forward cached BM25 token bags from unchanged symbols.
             # (Only needed in cold path — patch path retains them automatically.)
@@ -1756,8 +1926,11 @@ class SQLiteIndexStore:
 
         Used by the in-memory patch path in incremental_save to avoid a DB
         round-trip when the cached old_index is available.
+
+        Includes the fork-extension fields so the patch path stays coherent
+        with the cold path (architect CRITICAL #1).
         """
-        return {
+        d = {
             "id": symbol.id,
             "file": symbol.file,
             "name": symbol.name,
@@ -1781,6 +1954,16 @@ class SQLiteIndexStore:
             "param_count": getattr(symbol, "param_count", 0) or 0,
             "call_references": getattr(symbol, "call_references", []) or [],
         }
+        # Fork-extension fields (architect CRITICAL #1) — only populate when
+        # non-empty so the in-memory shape mirrors the load path (which only
+        # adds these keys for symbols that have side-table rows).
+        pc = getattr(symbol, "parent_classes", None) or []
+        if pc:
+            d["parent_classes"] = pc
+        pr = getattr(symbol, "package_requires", None) or []
+        if pr:
+            d["package_requires"] = pr
+        return d
 
     def _patch_index_from_delta(
         self,
@@ -1882,13 +2065,48 @@ class SQLiteIndexStore:
         )
 
     def _build_index_from_rows(
-        self, meta: dict, symbol_rows: list, file_rows: list, owner: str, name: str,
+        self,
+        meta: dict,
+        symbol_rows: list,
+        file_rows: list,
+        owner: str,
+        name: str,
+        ext_rows: Optional[list] = None,
     ) -> "CodeIndex":
         """Build a CodeIndex from pre-fetched meta dict, symbol rows, and file rows.
-        Used by both load_index and incremental_save to avoid redundant queries."""
+        Used by both load_index and incremental_save to avoid redundant queries.
+
+        ext_rows carries the rows from jcm_tcl_extensions (or None when the
+        cross-direction load guard fired or the table is absent — in either
+        case symbols default to empty parent_classes / package_requires).
+        """
         from .index_store import CodeIndex
 
         symbols = [self._row_to_symbol_dict(r) for r in symbol_rows]
+
+        # Apply fork-extension side-table data (architect CRITICAL #1 fix).
+        if ext_rows:
+            ext_by_id: dict[str, tuple] = {r["symbol_id"]: r for r in ext_rows}
+            for sym in symbols:
+                ext = ext_by_id.get(sym["id"])
+                if ext is None:
+                    continue
+                pc_raw = ext["parent_classes"]
+                if pc_raw:
+                    try:
+                        sym["parent_classes"] = json.loads(pc_raw)
+                    except (json.JSONDecodeError, ValueError):
+                        logger.warning(
+                            "Corrupted parent_classes JSON for symbol %s", sym["id"],
+                        )
+                pr_raw = ext["package_requires"]
+                if pr_raw:
+                    try:
+                        sym["package_requires"] = json.loads(pr_raw)
+                    except (json.JSONDecodeError, ValueError):
+                        logger.warning(
+                            "Corrupted package_requires JSON for symbol %s", sym["id"],
+                        )
 
         # Single pass over file_rows to build all file-level dicts
         source_files_unsorted: list[str] = []
@@ -2116,6 +2334,10 @@ class SQLiteIndexStore:
         db_path = self._db_path(owner, name)
         conn = self._connect(db_path)
         try:
+            # Ensure the fork-extension side-table exists and is stamped.
+            # migrate_from_json must bless the DB with the fork key so the
+            # Strict-A load gate in load_index does not refuse it.
+            _initialize_jcm_tcl_extensions(conn)
             conn.execute("BEGIN")
             # Write meta
             meta_keys = {

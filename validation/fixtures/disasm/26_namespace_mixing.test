@@ -1,0 +1,15 @@
+# P1.3 bundle (0): mixed literal + computed namespace_eval at the same level
+#
+# Sibling namespace eval blocks: one with a literal namespace name, one
+# with a $var-resolved name. Locks that the walker emits the corresponding
+# namespace_eval (literal) AND computed_namespace (dynamic) events at this
+# top-level depth. With the bundle (0) bridge fix, both inner-namespace
+# bodies survive recursion; this fixture pins the walker side of that
+# guarantee.
+namespace eval ::A { proc inA {} {} }
+set varB ::B
+namespace eval $varB { proc inB {} {} }
+
+---
+  namespace_eval    cmd=1 src_start=456 src_end=492 ns=::A body= proc inA {} {} 
+  computed_namespace  cmd=3 src_start=507 src_end=545

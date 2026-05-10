@@ -6,7 +6,74 @@ import time
 from typing import Optional
 
 from ..storage import IndexStore, result_cache_get, result_cache_put
+from ._class_helpers import get_bases
 from ._utils import resolve_repo
+
+
+def _find_descendant_classes(index, target_name: str) -> list[dict]:
+    """If *target_name* matches a class symbol, return its descendant classes.
+
+    Walks transitively via the dual-path :func:`get_bases` dispatch so the
+    feature works for both Tcl class symbols (side-table ``parent_classes``)
+    and other languages (signature-derived bases).  Each descendant entry
+    carries the relationship metadata needed by ``find_references`` to
+    surface it alongside import-derived references.
+
+    Returns an empty list when *target_name* is not a class, has no
+    descendants, or no class symbols are indexed.
+    """
+    class_syms = [s for s in index.symbols if s.get("kind") in ("class", "type")]
+    if not class_syms:
+        return []
+
+    # Find the target class first (case-sensitive then case-insensitive)
+    target_sym: Optional[dict] = None
+    for s in class_syms:
+        if s.get("name") == target_name:
+            target_sym = s
+            break
+    if target_sym is None:
+        lower = target_name.lower()
+        for s in class_syms:
+            if s.get("name", "").lower() == lower:
+                target_sym = s
+                target_name = s.get("name", target_name)
+                break
+    if target_sym is None:
+        return []
+
+    # Build {parent_name: [child_dict, ...]} via the dispatch
+    by_name: dict[str, dict] = {}
+    children_of: dict[str, list[dict]] = {}
+    for s in class_syms:
+        nm = s.get("name", "")
+        if nm and nm not in by_name:
+            by_name[nm] = s
+    for s in class_syms:
+        for base in get_bases(s):
+            children_of.setdefault(base, []).append(s)
+
+    # BFS from target_name down
+    from collections import deque
+    visited: set[str] = {target_name}
+    queue: deque = deque(children_of.get(target_name, []))
+    descendants: list[dict] = []
+    while queue:
+        child = queue.popleft()
+        cname = child.get("name", "")
+        if not cname or cname in visited:
+            continue
+        visited.add(cname)
+        descendants.append({
+            "file": child.get("file", ""),
+            "descendant_class": cname,
+            "ancestor_class": target_name,
+            "line": child.get("line", 0),
+            "match_type": "inheritance_descendant",
+        })
+        queue.extend(children_of.get(cname, []))
+
+    return descendants
 
 
 def _build_import_name_index(index) -> dict[str, list[tuple[str, dict]]]:
@@ -88,6 +155,7 @@ def _find_references_single(
     start: float,
     include_call_chain: bool = False,
     store=None,
+    include_descendants: bool = False,
 ) -> dict:
     """Core logic for a single identifier query. Returns the original flat shape."""
     if index.imports is None:
@@ -134,8 +202,16 @@ def _find_references_single(
                 index, store, owner, name, ref["file"], identifier
             )
 
+    # Optional: when the query target names a class, surface its descendants
+    # via the dual-path get_bases() dispatch.  Works cross-language: Tcl
+    # class symbols use side-table parent_classes; other languages use
+    # signature-derived bases.
+    descendants: list[dict] = []
+    if include_descendants:
+        descendants = _find_descendant_classes(index, identifier)
+
     elapsed = (time.perf_counter() - start) * 1000
-    return {
+    response = {
         "repo": f"{owner}/{name}",
         "identifier": identifier,
         "reference_count": len(results),
@@ -147,6 +223,11 @@ def _find_references_single(
                    "For usage-site matching beyond imports, also try search_text or check_references.",
         },
     }
+    if include_descendants:
+        response["descendants"] = descendants[:max_results]
+        response["descendant_count"] = len(descendants)
+        response["_meta"]["descendants_truncated"] = len(descendants) > max_results
+    return response
 
 
 def _find_references_batch(
@@ -216,6 +297,7 @@ def find_references(
     storage_path: Optional[str] = None,
     identifiers: Optional[list[str]] = None,
     include_call_chain: bool = False,
+    include_descendants: bool = False,
 ) -> dict:
     """Find all indexed files that import or reference an identifier.
 
@@ -233,6 +315,11 @@ def find_references(
         include_call_chain: When True (singular mode only), each reference entry gains a
             ``calling_symbols`` list of symbols in that file whose bodies mention the
             identifier. Gated off by default; batch mode ignores this flag.
+        include_descendants: When True (singular mode only), and ``identifier`` matches
+            a class symbol, the response gains a ``descendants`` list of class symbols
+            S whose ``get_bases(S)`` chain includes the target name (BFS, transitive).
+            Cross-language via the dual-path dispatch (Tcl side-table + signature regex).
+            Gated off by default; batch mode ignores this flag.
 
     Returns:
         Singular mode: dict with flat ``references`` list and _meta envelope.
@@ -264,7 +351,7 @@ def find_references(
         return _find_references_batch(identifiers, index, max_results, owner, name, start)
     else:
         repo_key = f"{owner}/{name}"
-        specific_key = (identifier, max_results, include_call_chain)
+        specific_key = (identifier, max_results, include_call_chain, include_descendants)
         cached = result_cache_get("find_references", repo_key, specific_key)
         if cached is not None:
             result = dict(cached)
@@ -276,6 +363,7 @@ def find_references(
             identifier, index, max_results, owner, name, start,
             include_call_chain=include_call_chain,
             store=store,
+            include_descendants=include_descendants,
         )
         result_cache_put("find_references", repo_key, specific_key, result)
         return result

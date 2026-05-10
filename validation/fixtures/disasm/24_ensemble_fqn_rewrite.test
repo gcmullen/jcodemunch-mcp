@@ -1,0 +1,14 @@
+# ensemble_fqn_rewrite fixture: clock format $x (P1.3 §13.6 Shape B)
+# Locks the higher-priority dispatch row that catches stock ensemble
+# subcommands routed through invokeReplace. Predicate:
+#   op==invokeReplace AND last slot LITERAL matches
+#   ^::tcl::ENS::SUB$ where ENS is one of the 10 stock ensembles
+#   AND last slot is NOT exactly "::tcl::namespace::eval"
+# Emits kind=ensemble (NOT a new kind) so the bridge driver's existing
+# ensemble handler runs unchanged — downstream parity with invokeStk-
+# routed ensembles. The bytecode_form=invokeReplace tag preserves
+# audit-trail signal (so consumers can distinguish the routing path).
+set x 1234567890
+clock format $x
+---
+  ensemble          cmd=2 src_start=665 src_end=679 ensemble=clock subcommand=format arg_count=3 bytecode_form=invokeReplace

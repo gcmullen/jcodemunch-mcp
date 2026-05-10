@@ -31,8 +31,8 @@ class Symbol:
     param_count: int = 0           # Number of parameters in the signature
     call_references: list[str] = field(default_factory=list)  # Called names from AST call_expression nodes
     unresolved_dispatches: list[dict] = field(default_factory=list)  # Dynamic-dispatch sites (Tcl: eval $var, $cmd args, pragma_*). Each: {"line": int, "kind": str, "snippet": str}.
-    parent_classes: list[dict] = field(default_factory=list)  # Class inheritance (Tcl class symbols only). Each: {"name": str, "line": int}.
-    package_requires: list[dict] = field(default_factory=list)  # Static dependencies on `__script__` (Tcl). Each: {"name": str, "version": str|None}.
+    parent_classes: list[dict] = field(default_factory=list)  # Class inheritance (Tcl class symbols only on the wire; dataclass defaults to [] for safe consumer access). Each: {"name": str, "line": int}.
+    package_requires: list[dict] = field(default_factory=list)  # Static dependencies (Tcl __script__ module symbol only on the wire; dataclass defaults to [] for safe consumer access). Each: {"name": str, "version": str|None}.
 
 
 

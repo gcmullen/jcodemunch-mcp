@@ -1133,6 +1133,11 @@ def _build_tools_list() -> list[Tool]:
                         "default": False,
                         "description": "When true (singular mode only), each reference entry includes calling_symbols: symbols in that file whose bodies mention the identifier. Default false.",
                     },
+                    "include_descendants": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "When true and the identifier resolves to a class symbol, the response also includes descendant classes (symbols whose parent_classes / signature-extracted bases include the target). Cross-language: Tcl uses the jcm_tcl_extensions side-table; other languages (Python/JS/Java/C#/Ruby/Go) use _parse_bases signature-regex extraction. Default false.",
+                    },
                 },
                 "required": ["repo"],
             },
@@ -3243,6 +3248,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     max_results=arguments.get("max_results", 50),
                     storage_path=storage_path,
                     include_call_chain=arguments.get("include_call_chain", False),
+                    include_descendants=arguments.get("include_descendants", False),
                 )
             )
         elif name == "check_references":

@@ -127,6 +127,83 @@ class TestExtractPackageNamesCSharp:
         assert "MyLib" in names
 
 
+class TestExtractFromTclIndex:
+    """Tcl handler reads `package_requires` from indexed __script__ symbols.
+
+    Tcl has no manifest file — package dependencies are declared in source
+    via `package require NAME ?VERSION?`.  The Tcl bridge captures these
+    into the jcm_tcl_extensions side-table; package_registry's index-aware
+    handler reads them from the synthetic __script__ symbol so cross-repo
+    package mapping works for Tcl the same way it works for everything else.
+    """
+
+    def _make_script_symbol(self, package_requires):
+        from jcodemunch_mcp.parser.symbols import Symbol
+        return Symbol(
+            id="src/foo.tcl::__script__#function",
+            file="src/foo.tcl",
+            name="__script__",
+            qualified_name="__script__",
+            kind="function",
+            language="tcl",
+            signature="(file-level script)",
+            package_requires=package_requires,
+        )
+
+    def test_single_package_require_returns_name(self, tmp_path):
+        sym = self._make_script_symbol([{"name": "Tk", "version": "8.6"}])
+        names = extract_package_names(str(tmp_path), symbols=[sym])
+        assert names == ["Tk"]
+
+    def test_multiple_package_requires_returns_first(self, tmp_path):
+        # Behaviour-lock: handler picks the first declared package name.
+        sym = self._make_script_symbol([
+            {"name": "Tk", "version": "8.6"},
+            {"name": "Itcl", "version": None},
+        ])
+        names = extract_package_names(str(tmp_path), symbols=[sym])
+        assert names == ["Tk"]
+
+    def test_empty_package_requires_returns_none(self, tmp_path):
+        sym = self._make_script_symbol([])
+        names = extract_package_names(str(tmp_path), symbols=[sym])
+        assert names == []
+
+    def test_non_tcl_symbol_ignored(self, tmp_path):
+        """Handler is Tcl-scoped — Python __init__.py-shaped symbols don't fire."""
+        from jcodemunch_mcp.parser.symbols import Symbol
+        sym = Symbol(
+            id="src/__init__.py::__script__#function",
+            file="src/__init__.py",
+            name="__script__",
+            qualified_name="__script__",
+            kind="function",
+            language="python",
+            signature="",
+            package_requires=[{"name": "should-not-be-read"}],
+        )
+        names = extract_package_names(str(tmp_path), symbols=[sym])
+        assert names == []
+
+    def test_dict_shaped_symbols_also_supported(self, tmp_path):
+        """Storage round-trip yields dict-shaped symbols on the wire."""
+        sym = {
+            "id": "src/foo.tcl::__script__#function",
+            "file": "src/foo.tcl",
+            "name": "__script__",
+            "kind": "function",
+            "language": "tcl",
+            "package_requires": [{"name": "Tk", "version": "8.6"}],
+        }
+        names = extract_package_names(str(tmp_path), symbols=[sym])
+        assert names == ["Tk"]
+
+    def test_no_symbols_arg_skips_tcl_handler(self, tmp_path):
+        """File-only callers (legacy) get the prior behaviour."""
+        names = extract_package_names(str(tmp_path))
+        assert names == []
+
+
 class TestExtractPackageNamesEdgeCases:
 
     def test_no_manifest_returns_empty(self, tmp_path):

@@ -1,7 +1,7 @@
 #!/usr/bin/env tclsh
 #
-# tcl_disasm_bridge.tcl — P1.2(a) deliverable per WALKER_CONTRACT_v2_2.md
-# §4.2 (Worker 3 driver loop).
+# tcl_disasm_bridge.tcl — P1.2(a) deliverable per
+# dev-docs/verdicts/WALKER_CONTRACT_v2_2.md §4.2 (Worker 3 driver loop).
 #
 # THE driver that wires together Workers 1/2/3a's deliverables:
 #   - opcode_walker.tcl + tcl_disasm_parser.tcl  (Worker 1) — bytecode parse
@@ -28,71 +28,17 @@ source [file join [file dirname [info script]] recursion_tables.tcl]
 source [file join [file dirname [info script]] compute_body_base.tcl]
 source [file join [file dirname [info script]] unresolved_detector.tcl]
 source [file join [file dirname [info script]] pragma_scanner.tcl]
+source [file join [file dirname [info script]] bridge_postpasses.tcl]
+source [file join [file dirname [info script]] tcl_disasm_bridge_json.tcl]
 
 namespace eval ::jcm::bridge {
     namespace export bridge_main parse_file emit_json
 }
 
-# ---------------------------------------------------------------------------
-# JSON encoding helpers — pure Tcl, no external deps.
-# ---------------------------------------------------------------------------
-#
-# WHY pure Tcl: the bridge runs inside arbitrary tclsh installations (system
-# 8.6, ActiveTcl, vendor builds). Pulling tcllib's `json` package would add
-# a runtime dependency the existing P1.0 bridge avoided. Same posture here.
-#
-# Numbers, "null", and pre-encoded JSON values pass through json_raw.
-
-namespace eval ::jcm::bridge::json {
-    namespace export escape string_v int_v null_v list_v object_v raw_v string_list
-}
-
-proc ::jcm::bridge::json::escape {s} {
-    return [string map [list \
-        \\  \\\\  \
-        \"  \\\"  \
-        \n  \\n   \
-        \r  \\r   \
-        \t  \\t   \
-        \x08 \\b  \
-        \x0c \\f  \
-    ] $s]
-}
-
-proc ::jcm::bridge::json::string_v {s} {
-    return "\"[escape $s]\""
-}
-
-proc ::jcm::bridge::json::int_v {n} {
-    if {$n eq "" || ![string is integer -strict $n]} { return 0 }
-    return $n
-}
-
-proc ::jcm::bridge::json::null_v {} { return "null" }
-
-proc ::jcm::bridge::json::raw_v {v} { return $v }
-
-proc ::jcm::bridge::json::list_v {items} {
-    return "\[[join $items ", "]\]"
-}
-
-proc ::jcm::bridge::json::string_list {items} {
-    set out [list]
-    foreach it $items {
-        lappend out [string_v $it]
-    }
-    return [list_v $out]
-}
-
-# Build a JSON object from a flat key,value-as-already-JSON list.
-# Caller is responsible for pre-encoding values via string_v / int_v / list_v / etc.
-proc ::jcm::bridge::json::object_v {pairs} {
-    set parts [list]
-    foreach {k v} $pairs {
-        lappend parts "[string_v $k]: $v"
-    }
-    return "\{[join $parts ", "]\}"
-}
+# NOTE: JSON encoding helpers (::jcm::bridge::json::*) and the symbol-list
+# emitter (emit_json + _symbol_to_json + _unresolved_entry_to_json +
+# _class_entry_to_json + _pkg_entry_to_json) live in
+# tcl_disasm_bridge_json.tcl as of P1.3 Stream 2.
 
 # ---------------------------------------------------------------------------
 # File I/O + line map
@@ -138,10 +84,22 @@ proc ::jcm::bridge::char_offset_to_line {line_offsets char_off} {
 # Build a char-index → cumulative-byte-offset map for the file source. Used
 # only when emitting Symbol byte_offset / byte_length so multi-byte UTF-8
 # input lands on the right Python byte position.
+#
+# PERF (P1.3 outlier fix): for ASCII input the map is the identity
+# [0..N]; building and traversing the list dominated parse-only time on
+# bluice (>40% on pkgIndex.tcl, >70% on RasterGroupBase.tcl). We now
+# return the sentinel `IDENTITY <len>` for ASCII strings; char_to_byte /
+# byte_to_char short-circuit on that marker. Multi-byte input still
+# builds the full map (correctness preserved). Detection uses
+# `string is ascii` which is a single C-level scan.
 proc ::jcm::bridge::build_char_to_byte {src} {
+    set len [string length $src]
+    if {[string is ascii $src]} {
+        # Identity sentinel — char N maps to byte N for all N in [0..len].
+        return [list IDENTITY $len]
+    }
     set map [list]
     set byte_pos 0
-    set len [string length $src]
     for {set i 0} {$i < $len} {incr i} {
         lappend map $byte_pos
         set ch [string index $src $i]
@@ -153,6 +111,12 @@ proc ::jcm::bridge::build_char_to_byte {src} {
 
 proc ::jcm::bridge::char_to_byte {char_byte_map char_off} {
     if {$char_off < 0} { return 0 }
+    # ASCII identity fast path.
+    if {[lindex $char_byte_map 0] eq "IDENTITY"} {
+        set len [lindex $char_byte_map 1]
+        if {$char_off > $len} { return $len }
+        return $char_off
+    }
     set last [llength $char_byte_map]
     if {$char_off >= $last} { return [lindex $char_byte_map [expr {$last - 1}]] }
     return [lindex $char_byte_map $char_off]
@@ -163,17 +127,34 @@ proc ::jcm::bridge::char_to_byte {char_byte_map char_off} {
 # tclsh 8.6.14 with UTF-8 input).  Tcl's `string index` / `string range`
 # operate on CHARS, so when the file contains multi-byte characters we
 # must translate disasm-byte offsets to char offsets before slicing.
-# Linear scan over the char_byte_map; cost is acceptable because most files
-# only run this on event src offsets and recursive body bases.
+#
+# PERF (P1.3 outlier fix): the previous linear forward scan dominated
+# total runtime on the bluice corpus (4146 calls × ~1.8 ms each on the
+# 7 kLoC RasterGroupBase outlier). Two-tier fast path:
+#   1. ASCII identity: byte == char by construction.
+#   2. Multi-byte: binary search instead of O(n) linear scan.
 proc ::jcm::bridge::byte_to_char {char_byte_map byte_off} {
     if {$byte_off <= 0} { return 0 }
-    set n [llength $char_byte_map]
-    for {set i 0} {$i < $n} {incr i} {
-        set b [lindex $char_byte_map $i]
-        if {$b == $byte_off} { return $i }
-        if {$b > $byte_off} { return [expr {$i - 1 < 0 ? 0 : $i - 1}] }
+    # ASCII identity fast path.
+    if {[lindex $char_byte_map 0] eq "IDENTITY"} {
+        set len [lindex $char_byte_map 1]
+        if {$byte_off > $len} { return [expr {$len - 1}] }
+        return $byte_off
     }
-    return [expr {$n - 1}]
+    set n [llength $char_byte_map]
+    if {$n == 0} { return 0 }
+    # Binary search: find largest i such that map[i] <= byte_off.
+    set lo 0
+    set hi [expr {$n - 1}]
+    while {$lo < $hi} {
+        set mid [expr {($lo + $hi + 1) / 2}]
+        if {[lindex $char_byte_map $mid] <= $byte_off} {
+            set lo $mid
+        } else {
+            set hi [expr {$mid - 1}]
+        }
+    }
+    return $lo
 }
 
 # ---------------------------------------------------------------------------
@@ -363,104 +344,9 @@ proc ::jcm::bridge::_substr {start_char end_char} {
     return [string range $file_src $start_char $end_char]
 }
 
-# ---------------------------------------------------------------------------
-# File-offset post-resolution pass — replace {__file_offset__ N} tagged
-# tuples (produced by recursion_tables::_handle_inherit /
-# _handle_superclass / _handle_package_require) with concrete 1-based line
-# numbers via the file's line map.
-#
-# Per §11 row "Worker 2 `__file_offset__` tag (rev4 user-decided=keep)":
-# the bridge owns the line map; handlers stay pure.
-#
-# Walks each symbol once after the dispatch phase finishes.
-# ---------------------------------------------------------------------------
-
-proc ::jcm::bridge::_resolve_file_offset_tags {} {
-    variable symbols
-    variable line_offsets
-    set new [list]
-    foreach sym $symbols {
-        if {[dict exists $sym parent_classes]} {
-            set pc [list]
-            foreach entry [dict get $sym parent_classes] {
-                lappend pc [_resolve_offset_in_entry $entry $line_offsets]
-            }
-            dict set sym parent_classes $pc
-        }
-        if {[dict exists $sym package_requires]} {
-            set pr [list]
-            foreach entry [dict get $sym package_requires] {
-                lappend pr [_resolve_offset_in_entry $entry $line_offsets]
-            }
-            dict set sym package_requires $pr
-        }
-        lappend new $sym
-    }
-    set symbols $new
-}
-
-# An entry is a dict like {name X line {__file_offset__ N}}. Replace the
-# tagged-tuple line with the actual 1-based line number.
-proc ::jcm::bridge::_resolve_offset_in_entry {entry line_offsets} {
-    if {![dict exists $entry line]} { return $entry }
-    set v [dict get $entry line]
-    if {[llength $v] >= 2 && [lindex $v 0] eq "__file_offset__"} {
-        set off [lindex $v 1]
-        dict set entry line [char_offset_to_line $line_offsets $off]
-    }
-    return $entry
-}
-
-# ---------------------------------------------------------------------------
-# Pragma attachment per NG-1 — attach pragmas to symbols whose
-# declaration_line == pragma.target_line.
-#
-# Implementation note: walks all symbols and all pragmas; cost is O(S*P)
-# where S/P are tiny in practice. A line-keyed dict would be faster but
-# this is simpler and the cost is negligible on bluice scale.
-#
-# Phase-1 semantics: every matched pragma adds an entry into the symbol's
-# unresolved_dispatches list with kind=pragma_<TYPE>. Suppression is Phase 2.
-# ---------------------------------------------------------------------------
-
-proc ::jcm::bridge::_attach_pragmas {pragmas} {
-    variable symbols
-    set new [list]
-    set sym_pragmas [dict create]
-    foreach pr $pragmas {
-        set tgt [dict get $pr target_line]
-        if {![dict exists $sym_pragmas $tgt]} {
-            dict set sym_pragmas $tgt [list]
-        }
-        set lst [dict get $sym_pragmas $tgt]
-        lappend lst $pr
-        dict set sym_pragmas $tgt $lst
-    }
-    foreach sym $symbols {
-        set decl_line [dict get $sym line]
-        if {[dict exists $sym_pragmas $decl_line]} {
-            set ud [list]
-            if {[dict exists $sym unresolved_dispatches]} {
-                set ud [dict get $sym unresolved_dispatches]
-            }
-            foreach pr [dict get $sym_pragmas $decl_line] {
-                set kind [dict get $pr kind]
-                set entry [dict create kind "pragma_$kind" \
-                    line [dict get $pr line] \
-                    file [dict get $sym file]]
-                if {[dict exists $pr extra]} {
-                    foreach {ek ev} [dict get $pr extra] {
-                        dict set entry $ek $ev
-                    }
-                }
-                lappend ud $entry
-            }
-            dict set sym unresolved_dispatches $ud
-        }
-        lappend new $sym
-    }
-    set symbols $new
-}
+# NOTE: Post-pass procs (_resolve_file_offset_tags, _resolve_offset_in_entry,
+# _attach_pragmas, _attribute_out_of_line_bodies, _ensure_file_field,
+# _maybe_drop_script) live in bridge_postpasses.tcl as of P1.3 Stream 2.
 
 # ---------------------------------------------------------------------------
 # Main recursive walker — drives the whole bridge pass.
@@ -608,8 +494,13 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
             # nested compile context the disasm parser doesn't expand.
             # Re-extract and recurse so call edges inside the body are
             # captured against the parent symbol.
-            if {$ens eq "dict" && $sub in {for with update map}} {
-                _recurse_dict_body $cmd_text $abs_start $sub $parent_sym_idx $parent_qname
+            #
+            # P1.3 bundle (2): all C-row + brace-sweep work goes through
+            # the single `dispatch_c` entrypoint. The dict subcommand is
+            # passed in `ev_extra` so `_handle_dict` can route correctly.
+            if {$ens eq "dict"} {
+                _dispatch_c_via_rectbl $ens $cmd_text $abs_start \
+                    $parent_sym_idx $parent_qname [dict create subcommand $sub]
             }
             return
         }
@@ -650,6 +541,23 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
                         _add_call_to_parent $parent_sym_idx $after_var
                     }
                 }
+            }
+            # P1.3 bundle (0): `namespace eval $ns BODY` lands here as
+            # kind=computed_namespace. The body literal is still parseable —
+            # only the namespace NAME is dynamic. Without this recurse the
+            # body's inner procs / nested namespaces are silently dropped,
+            # which is the data-loss regression closed by the bundle.
+            #
+            # Cmd shape:  namespace eval NAME-OR-VAR BODY  -> body word idx 3.
+            # We recurse against the EXISTING parent (parent_sym_idx /
+            # parent_qname) because we don't have a resolved namespace name to
+            # synthesize a host symbol — anything emitted inside the body will
+            # attribute to the enclosing scope, which is correct for static
+            # call-graph + symbol-discovery purposes (the dynamic ns is
+            # already reflected via the unresolved_dispatches entry above).
+            if {$kind eq "computed_namespace"} {
+                _handle_computed_namespace_body_recurse \
+                    $cmd_text $abs_start $parent_sym_idx $parent_qname
             }
             return
         }
@@ -730,7 +638,8 @@ proc ::jcm::bridge::_handle_pattern_a {ev cmd_text abs_start abs_end parent_sym_
     # rather than introducing a new one.
     set c_handler [::jcm::disasm::rectbl::classify_c $name $slots]
     if {$c_handler ne ""} {
-        _apply_c_handler $c_handler $name $cmd_text $abs_start $parent_sym_idx
+        _apply_c_handler $c_handler $name $cmd_text $abs_start \
+            $parent_sym_idx $parent_qname
     }
 
     # Sub-table A — definition forms. Multiple matches possible (e.g. C
@@ -750,12 +659,20 @@ proc ::jcm::bridge::_handle_pattern_a {ev cmd_text abs_start abs_end parent_sym_
     # `package require` per Δ0.2 C1 (BOTH the field AND the import symbol).
     # An earlier draft of this branch double-emitted; removed in P1.2 fix.
 
-    # switch / try / if / while / for: walker doesn't see body events
+    # if / while / for / foreach / lmap: walker doesn't see body events
     # because the bytecode compiler inlines them into a sub-context the
     # disasm parser doesn't expand.  Recurse into each brace-delimited body
     # word so calls inside surface against the parent symbol.
-    if {$name in {switch try if while for foreach lmap}} {
-        _recurse_brace_bodies $cmd_text $abs_start $name $parent_sym_idx $parent_qname
+    #
+    # P1.3 bundle (2): all C-row + brace-sweep work goes through the
+    # single `dispatch_c` entrypoint. switch/try are SUBTABLE_C rows
+    # whose handlers now perform body recursion themselves (already run
+    # via _apply_c_handler above); the names below fall to dispatch_c's
+    # brace-sweep fallback because they don't carry schema mutations and
+    # therefore don't appear in SUBTABLE_C.
+    if {$name in {if while for foreach lmap}} {
+        _dispatch_c_via_rectbl $name $cmd_text $abs_start \
+            $parent_sym_idx $parent_qname [dict create]
         return
     }
 
@@ -900,10 +817,14 @@ proc ::jcm::bridge::_apply_a_row {row name cmd_text abs_start abs_end parent_sym
     if {[dict get $extracted dynamic]} {
         if {$new_sym_idx >= 0} {
             variable symbols
+            variable file_path
             set sym [lindex $symbols $new_sym_idx]
+            # The `file` field on the symbol is populated by
+            # _ensure_file_field in the post-pass, so it isn't available
+            # here yet. Use the bridge's file_path state directly.
             set entry [dict create kind dynamic_body \
                 line [dict get $sym line] \
-                file [dict get $sym file]]
+                file $file_path]
             set sym [::jcm::disasm::unresolved::append_to_sym $sym $entry]
             lset symbols $new_sym_idx $sym
         }
@@ -938,7 +859,7 @@ proc ::jcm::bridge::_apply_a_row {row name cmd_text abs_start abs_end parent_sym
 
 # Apply a sub-table C handler. Handlers mutate the enclosing symbol's
 # parent_classes / package_requires fields and may set _emit_import.
-proc ::jcm::bridge::_apply_c_handler {handler_proc name cmd_text abs_start parent_sym_idx} {
+proc ::jcm::bridge::_apply_c_handler {handler_proc name cmd_text abs_start parent_sym_idx parent_qname} {
     variable symbols
     variable file_path
     if {$parent_sym_idx < 0} {
@@ -947,22 +868,77 @@ proc ::jcm::bridge::_apply_c_handler {handler_proc name cmd_text abs_start paren
         set parent_sym_idx [_get_or_synth_script]
     }
     set sym [lindex $symbols $parent_sym_idx]
-    # Call the handler — receives cmd_text + src_start + enclosing_sym
-    # + parent_file + parent_src_offset. parent_src_offset is 0 because
-    # the handlers wrap the offset into a {__file_offset__ N} tuple that
-    # the bridge driver post-resolves.
+    # Call the handler — under P1.3 bundle (2) handlers also receive
+    # walk_cb + parent_qname + parent_sym_idx + ev_extra so body-recursion
+    # rows (try/switch/dict) can re-enter the bridge walker. Schema-only
+    # rows (inherit/superclass/package_require) ignore the new params.
+    set walk_cb [list ::jcm::bridge::walk_recursive]
     if {[catch {
-        set sym [::jcm::disasm::rectbl::$handler_proc $cmd_text \
-            $abs_start $sym $file_path 0]
+        set sym_after [::jcm::disasm::rectbl::$handler_proc $cmd_text \
+            $abs_start $sym $file_path 0 $walk_cb $parent_qname \
+            $parent_sym_idx [dict create]]
     } err]} {
         puts stderr "C_HANDLER_ERROR proc=$handler_proc msg=$err"
         return
     }
-    lset symbols $parent_sym_idx $sym
+    # Merge schema-only handler outputs (parent_classes / package_requires
+    # / _emit_import marker) into the LIVE symbol — body-recursion handlers
+    # may have already mutated `symbols` via walk_recursive while we held a
+    # snapshot, so we must NOT overwrite with the pre-handler $sym. Re-read
+    # the live symbol and copy the handler-owned schema keys forward.
+    set live [lindex $symbols $parent_sym_idx]
+    foreach k {parent_classes package_requires _emit_import} {
+        if {[dict exists $sym_after $k]} {
+            dict set live $k [dict get $sym_after $k]
+        }
+    }
+    lset symbols $parent_sym_idx $live
     # If the handler set _emit_import (package require), realise it.
-    if {[dict exists $sym _emit_import]} {
-        _emit_import_record $sym $abs_start
+    if {[dict exists $live _emit_import]} {
+        _emit_import_record $live $abs_start
         # Strip the marker so it doesn't ride out in the JSON.
+        set sym2 [lindex $symbols $parent_sym_idx]
+        dict unset sym2 _emit_import
+        lset symbols $parent_sym_idx $sym2
+    }
+}
+
+# P1.3 bundle (2) — Module boundary B. Single bridge-side entrypoint that
+# wraps recursion_tables::dispatch_c so the bridge driver only ever names
+# ONE recursion-table proc. Handles enclosing_sym lookup + post-call
+# write-back and the _emit_import marker realization. Used for:
+#   - dict ensemble events (subcommand carried in ev_extra)
+#   - switch / try / if / while / for / foreach / lmap pattern_a events
+#     (no extras needed; falls through to brace-body sweep)
+proc ::jcm::bridge::_dispatch_c_via_rectbl {ev_name cmd_text abs_start parent_sym_idx parent_qname ev_extra} {
+    variable symbols
+    variable file_path
+    if {$parent_sym_idx < 0} {
+        # No enclosing symbol — for `package require` / file-scope
+        # `inherit`, this is __script__. Use the synthesized __script__.
+        set parent_sym_idx [_get_or_synth_script]
+    }
+    set sym [lindex $symbols $parent_sym_idx]
+    set walk_cb [list ::jcm::bridge::walk_recursive]
+    if {[catch {
+        set sym_after [::jcm::disasm::rectbl::dispatch_c $ev_name $cmd_text \
+            $abs_start $sym $file_path 0 $walk_cb $parent_qname \
+            $parent_sym_idx $ev_extra]
+    } err]} {
+        puts stderr "DISPATCH_C_ERROR ev=$ev_name msg=$err"
+        return
+    }
+    # Merge schema-only mutations forward without clobbering call edges
+    # added by walk_recursive during dispatch_c (see _apply_c_handler).
+    set live [lindex $symbols $parent_sym_idx]
+    foreach k {parent_classes package_requires _emit_import} {
+        if {[dict exists $sym_after $k]} {
+            dict set live $k [dict get $sym_after $k]
+        }
+    }
+    lset symbols $parent_sym_idx $live
+    if {[dict exists $live _emit_import]} {
+        _emit_import_record $live $abs_start
         set sym2 [lindex $symbols $parent_sym_idx]
         dict unset sym2 _emit_import
         lset symbols $parent_sym_idx $sym2
@@ -1108,6 +1084,42 @@ proc ::jcm::bridge::_handle_namespace_eval {ev cmd_text abs_start abs_end parent
     }
 }
 
+# P1.3 bundle (0) — body recursion for computed_namespace events.
+#
+# `namespace eval $ns BODY` arrives as a computed_namespace walker event.
+# The unresolved_detector tags it; previously dispatch fell off here and the
+# BODY's inner procs / nested namespaces were lost (the critic-flagged data
+# regression). We can't synthesize a namespace symbol because the name is
+# dynamic, but the body literal is parseable — recurse against the enclosing
+# parent so call-graph + nested-symbol discovery survives.
+#
+# Failure modes (all soft, mirroring the disasm-error / orphan-pc posture):
+#   - body word also non-literal (computed BODY): extract_from_event returns
+#     ok=0 with dynamic=1 — we silently skip (the unresolved tag carries the
+#     diagnostic).
+#   - body slot present but unparseable (brace mismatch within): walk_recursive
+#     emits its own DISASM_ERROR via stderr.
+#   - any uncaught error: reported via stderr + return; bridge stays healthy.
+proc ::jcm::bridge::_handle_computed_namespace_body_recurse {cmd_text abs_start parent_sym_idx parent_qname} {
+    # `namespace eval NAME-OR-VAR BODY` — BODY is the 4th word (index 3).
+    if {[catch {
+        set extracted [::jcm::disasm::body::extract_from_event $cmd_text 3 $abs_start]
+    } err]} {
+        puts stderr "COMPUTED_NS_RECURSE_FAIL stage=extract msg=$err"
+        return
+    }
+    if {![dict get $extracted ok]} {
+        # Body is itself dynamic / unbalanced — graceful skip.
+        return
+    }
+    if {[catch {
+        walk_recursive [dict get $extracted body_src] \
+            [dict get $extracted body_offset] $parent_sym_idx $parent_qname
+    } err]} {
+        puts stderr "COMPUTED_NS_RECURSE_FAIL stage=walk msg=$err"
+    }
+}
+
 proc ::jcm::bridge::_extract_namespace_exports {body} {
     set out [list]
     foreach line [split $body "\n"] {
@@ -1164,177 +1176,13 @@ proc ::jcm::bridge::_synth_slots_from_cmd {cmd_text} {
     return $slots
 }
 
-# Recurse into bodies of compound commands the walker can't decompile.
-# Per-command body-position knowledge keeps us from misinterpreting data
-# positions (errcode lists, var lists) as code.
-#
-# Supported shapes:
-#   switch ?opts? VALUE pat body ?pat body ...?
-#       — strip leading -opts (start with '-'); the value word; then alternating
-#         pattern (skip), body (recurse).  `-` continuation bodies skipped.
-#   switch ?opts? VALUE {pat body pat body ...}    (block form)
-#       — single block argument; flatten and recurse the inner odd words.
-#   try BODY ?on errcode varlist BODY?* ?trap pat varlist BODY?* ?finally BODY?
-#       — first arg is BODY; thereafter scan for keywords on/trap/finally
-#         and recurse the trailing brace-word.
-#   if/while/for/foreach/lmap fall through to a generic brace-body sweep —
-#         the walker DOES emit events for these in most cases; the sweep
-#         here covers compile-context fallbacks where the walker missed.
-proc ::jcm::bridge::_recurse_brace_bodies {cmd_text abs_start name parent_sym_idx parent_qname} {
-    if {[catch {set parts [lrange $cmd_text 0 end]}]} return
-    set total [llength $parts]
-    switch -- $name {
-        switch { _recurse_switch $cmd_text $abs_start $parts $parent_sym_idx $parent_qname }
-        try    { _recurse_try $cmd_text $abs_start $parts $parent_sym_idx $parent_qname }
-        default {
-            _recurse_generic_bodies $cmd_text $abs_start $parts $name $parent_sym_idx $parent_qname
-        }
-    }
-}
-
-proc ::jcm::bridge::_recurse_switch {cmd_text abs_start parts parent_sym_idx parent_qname} {
-    set total [llength $parts]
-    # Strip leading -opt words.
-    set i 1
-    while {$i < $total && [string match "-*" [lindex $parts $i]]} { incr i }
-    # Skip the value word.
-    incr i
-    if {$i >= $total} return
-    # Block form: single brace word containing pat/body pairs.
-    if {[expr {$total - $i}] == 1} {
-        set inner [lindex $parts $i]
-        # Recurse into the odd-index words inside inner (split into list).
-        if {[catch {set inner_parts [lrange $inner 0 end]}]} return
-        # Find the body's char offset within cmd_text via word_start.
-        set body_idx $i
-        set extracted [::jcm::disasm::body::extract_from_event $cmd_text $body_idx $abs_start]
-        if {![dict get $extracted ok]} return
-        set base [dict get $extracted body_offset]
-        # Walk pat/body pairs inside the inner block.  Each body's offset
-        # within the inner string is approximated by find_word_start.
-        set inner_text [dict get $extracted body_src]
-        set j 0
-        set n [llength $inner_parts]
-        while {$j < $n} {
-            set body_word [lindex $inner_parts [expr {$j + 1}]]
-            if {$body_word eq "-"} { incr j; continue }
-            set start_off [::jcm::disasm::body::find_word_start $inner_text [expr {$j + 1}]]
-            if {$start_off < 0} break
-            set crange [::jcm::disasm::body::word_content_range $inner_text $start_off]
-            if {$crange eq {}} { incr j 2; continue }
-            lassign $crange cs ce
-            set body_src [string range $inner_text $cs $ce]
-            walk_recursive $body_src [expr {$base + $cs}] $parent_sym_idx $parent_qname
-            incr j 2
-        }
-        return
-    }
-    # Inline form: switch VALUE pat body pat body ...
-    # Note: "PAT - PAT BODY" means PAT-1 inherits PAT-2's body. Skip past
-    # the `-` continuation slot entirely so we don't treat the next pattern
-    # word as a body.
-    set j $i
-    while {$j < $total} {
-        if {[expr {$j + 1}] >= $total} break
-        set body_word [lindex $parts [expr {$j + 1}]]
-        if {$body_word eq "-"} {
-            # PAT - : skip both PAT and `-`, the next iteration's PAT shares
-            # this group's body.
-            incr j 2
-            continue
-        }
-        set body_idx [expr {$j + 1}]
-        set extracted [::jcm::disasm::body::extract_from_event $cmd_text $body_idx $abs_start]
-        if {[dict get $extracted ok]} {
-            walk_recursive [dict get $extracted body_src] \
-                [dict get $extracted body_offset] $parent_sym_idx $parent_qname
-        }
-        incr j 2
-    }
-}
-
-proc ::jcm::bridge::_recurse_try {cmd_text abs_start parts parent_sym_idx parent_qname} {
-    set total [llength $parts]
-    if {$total < 2} return
-    # First brace word is the main body.
-    set extracted [::jcm::disasm::body::extract_from_event $cmd_text 1 $abs_start]
-    if {[dict get $extracted ok]} {
-        walk_recursive [dict get $extracted body_src] \
-            [dict get $extracted body_offset] $parent_sym_idx $parent_qname
-    }
-    # Scan for clause keywords; the BODY word follows after the clause's
-    # data slots (errcode + varlist for on/trap; nothing for finally).
-    set i 2
-    while {$i < $total} {
-        set kw [lindex $parts $i]
-        switch -- $kw {
-            on - trap {
-                # on errcode varlist BODY  -> body at i+3
-                set body_idx [expr {$i + 3}]
-                if {$body_idx < $total} {
-                    set ext [::jcm::disasm::body::extract_from_event $cmd_text $body_idx $abs_start]
-                    if {[dict get $ext ok]} {
-                        walk_recursive [dict get $ext body_src] \
-                            [dict get $ext body_offset] $parent_sym_idx $parent_qname
-                    }
-                }
-                incr i 4
-            }
-            finally {
-                # finally BODY -> body at i+1
-                set body_idx [expr {$i + 1}]
-                if {$body_idx < $total} {
-                    set ext [::jcm::disasm::body::extract_from_event $cmd_text $body_idx $abs_start]
-                    if {[dict get $ext ok]} {
-                        walk_recursive [dict get $ext body_src] \
-                            [dict get $ext body_offset] $parent_sym_idx $parent_qname
-                    }
-                }
-                incr i 2
-            }
-            default { incr i }
-        }
-    }
-}
-
-proc ::jcm::bridge::_recurse_generic_bodies {cmd_text abs_start parts name parent_sym_idx parent_qname} {
-    # Sweep every brace-word; recurse into it. Used for if/while/for/foreach/lmap
-    # as a safety net when the walker doesn't surface body events from a
-    # nested compile context.
-    set total [llength $parts]
-    for {set j 1} {$j < $total} {incr j} {
-        set word [lindex $parts $j]
-        # Skip non-brace words and obvious var/option references.
-        if {[string index $word 0] eq "-"} continue
-        # Locate the word in the cmd source; check if it was brace-delimited.
-        set start_off [::jcm::disasm::body::find_word_start $cmd_text $j]
-        if {$start_off < 0} continue
-        if {[string index $cmd_text $start_off] ne "\{"} continue
-        set ext [::jcm::disasm::body::extract_from_event $cmd_text $j $abs_start]
-        if {[dict get $ext ok]} {
-            walk_recursive [dict get $ext body_src] \
-                [dict get $ext body_offset] $parent_sym_idx $parent_qname
-        }
-    }
-}
-
-# Recurse into the body argument of `dict for/with/update/map`. Body word
-# index varies by subcommand:
-#   dict for VARLIST DICT BODY    -> body at index 4
-#   dict with DICTVAR BODY        -> body at index 3 (no VARLIST)
-#   dict with DICTVAR ?KEY ...? BODY -> body is last word
-#   dict update DICTVAR KEY VAR ?KEY VAR ...? BODY -> body is last word
-#   dict map VARLIST DICT BODY    -> body at index 4
-proc ::jcm::bridge::_recurse_dict_body {cmd_text abs_start sub parent_sym_idx parent_qname} {
-    set total [_count_cmd_words $cmd_text]
-    if {$total < 4} return
-    set body_idx [expr {$total - 1}]    ;# default: last word
-    set extracted [::jcm::disasm::body::extract_from_event $cmd_text $body_idx $abs_start]
-    if {[dict get $extracted ok]} {
-        walk_recursive [dict get $extracted body_src] \
-            [dict get $extracted body_offset] $parent_sym_idx $parent_qname
-    }
-}
+# NOTE: Recursion-routing for switch/try/dict/generic-brace bodies
+# (recurse_brace_bodies, recurse_dict_body, _recurse_switch, _recurse_try,
+# _recurse_generic_bodies) lives in recursion_tables.tcl as of P1.3 Stream
+# 2 (Task #16 (F)). The bridge calls them via the table-driven dispatchers
+# and passes `[list ::jcm::bridge::walk_recursive]` as the walker
+# callback so the recursion-table file stays free of bridge-namespace
+# dependencies.
 
 # First word of a command source — used to recover the call name when the
 # walker reduces the cmd to a strcat callback.
@@ -1649,32 +1497,6 @@ proc ::jcm::bridge::_detect_annotations {body_src} {
 }
 
 # ---------------------------------------------------------------------------
-# Cross-file class index — `body Widget::method` attribution.
-#
-# Worker 2's compute_body_base::build_class_index + attribute_out_of_line_body
-# do the actual lookup. The bridge's job is to:
-#   1. Build the index after all symbols are emitted.
-#   2. Walk every kind=method symbol whose qualified_name contains "::"
-#      and whose keywords contains "itcl_body" — those are out-of-line.
-#   3. For each, attribute to the class symbol; if no match, log a warning.
-# ---------------------------------------------------------------------------
-
-proc ::jcm::bridge::_attribute_out_of_line_bodies {} {
-    variable symbols
-    variable file_path
-    set class_index [::jcm::disasm::body::build_class_index $symbols]
-    foreach sym $symbols {
-        if {![dict exists $sym keywords]} continue
-        if {"itcl_body" ni [dict get $sym keywords]} continue
-        set qname [dict get $sym qualified_name]
-        set match [::jcm::disasm::body::attribute_out_of_line_body $class_index $qname]
-        if {$match eq {}} {
-            puts stderr "OUT_OF_LINE_BODY_NO_CLASS file=$file_path qname=$qname"
-        }
-    }
-}
-
-# ---------------------------------------------------------------------------
 # Top-level entry — bridge_main reads the file and runs the full pipeline.
 # ---------------------------------------------------------------------------
 
@@ -1706,15 +1528,17 @@ proc ::jcm::bridge::bridge_main {filepath} {
     # Post-pass A: resolve {__file_offset__ N} tagged tuples.
     _resolve_file_offset_tags
 
-    # Post-pass B: pragma → symbol attachment per NG-1.
+    # Post-pass B: ensure every symbol carries a `file` field BEFORE any
+    # later post-pass that reads it (pragma attachment + dynamic_body
+    # tagging both copy `file` onto unresolved_dispatches entries; running
+    # the sweep first means handlers see a populated field).
+    _ensure_file_field
+
+    # Post-pass C: pragma → symbol attachment per NG-1.
     _attach_pragmas $pragmas
 
-    # Post-pass C: cross-file class attribution warnings.
+    # Post-pass D: cross-file class attribution warnings.
     _attribute_out_of_line_bodies
-
-    # Post-pass D: file-level decorators on every symbol — set the `file`
-    # field used by unresolved entry serialization. Single sweep.
-    _ensure_file_field
 
     # Post-pass E: drop __script__ if it has no useful signal — matches the
     # v1 elide policy. Keep it whenever package_requires has content so the
@@ -1722,152 +1546,6 @@ proc ::jcm::bridge::bridge_main {filepath} {
     _maybe_drop_script
 
     return [emit_json]
-}
-
-proc ::jcm::bridge::_ensure_file_field {} {
-    variable symbols
-    variable file_path
-    set new [list]
-    foreach sym $symbols {
-        if {![dict exists $sym file] || [dict get $sym file] eq ""} {
-            dict set sym file $file_path
-        }
-        lappend new $sym
-    }
-    set symbols $new
-}
-
-proc ::jcm::bridge::_maybe_drop_script {} {
-    variable symbols
-    variable script_sym_idx
-    if {$script_sym_idx < 0} return
-    set sym [lindex $symbols $script_sym_idx]
-    set has_calls [expr {[llength [dict get $sym call_references]] > 0}]
-    set has_unres [expr {[dict exists $sym unresolved_dispatches]
-                          && [llength [dict get $sym unresolved_dispatches]] > 0}]
-    set has_pkg [expr {[dict exists $sym package_requires]
-                        && [llength [dict get $sym package_requires]] > 0}]
-    if {!$has_calls && !$has_unres && !$has_pkg} {
-        # Drop the symbol; renumber by rebuilding the list.
-        set new [list]
-        set i 0
-        foreach s $symbols {
-            if {$i != $script_sym_idx} { lappend new $s }
-            incr i
-        }
-        set symbols $new
-        set script_sym_idx -1
-    }
-}
-
-# ---------------------------------------------------------------------------
-# JSON emission — serialize the symbol list to a single JSON array string.
-# ---------------------------------------------------------------------------
-
-proc ::jcm::bridge::emit_json {} {
-    variable symbols
-    set rows [list]
-    foreach sym $symbols {
-        lappend rows [_symbol_to_json $sym]
-    }
-    return [::jcm::bridge::json::list_v $rows]
-}
-
-proc ::jcm::bridge::_symbol_to_json {sym} {
-    set name [dict get $sym name]
-    set qname [dict get $sym qualified_name]
-    set kind [dict get $sym kind]
-    set sig [dict get $sym signature]
-    set doc [dict get $sym docstring]
-    set line [dict get $sym line]
-    set end_line [dict get $sym end_line]
-    set boff [dict get $sym byte_offset]
-    set blen [dict get $sym byte_length]
-    set parent [dict get $sym parent]
-    set cyclo [dict get $sym cyclomatic]
-    set nest  [dict get $sym max_nesting]
-    set pcount [dict get $sym param_count]
-    set calls [dict get $sym call_references]
-    set udisp [dict get $sym unresolved_dispatches]
-    set decorators [dict get $sym decorators]
-    set keywords [dict get $sym keywords]
-    set parent_classes [dict get $sym parent_classes]
-    set package_requires [dict get $sym package_requires]
-
-    set udisp_json [list]
-    foreach e $udisp { lappend udisp_json [_unresolved_entry_to_json $e] }
-    set parent_json [list]
-    foreach e $parent_classes { lappend parent_json [_class_entry_to_json $e] }
-    set pr_json [list]
-    foreach e $package_requires { lappend pr_json [_pkg_entry_to_json $e] }
-
-    return [::jcm::bridge::json::object_v [list \
-        name             [::jcm::bridge::json::string_v $name] \
-        qualified_name   [::jcm::bridge::json::string_v $qname] \
-        kind             [::jcm::bridge::json::string_v $kind] \
-        signature        [::jcm::bridge::json::string_v $sig] \
-        docstring        [::jcm::bridge::json::string_v $doc] \
-        line             [::jcm::bridge::json::int_v $line] \
-        end_line         [::jcm::bridge::json::int_v $end_line] \
-        byte_offset      [::jcm::bridge::json::int_v $boff] \
-        byte_length      [::jcm::bridge::json::int_v $blen] \
-        parent           [::jcm::bridge::json::string_v $parent] \
-        cyclomatic       [::jcm::bridge::json::int_v $cyclo] \
-        max_nesting      [::jcm::bridge::json::int_v $nest] \
-        param_count      [::jcm::bridge::json::int_v $pcount] \
-        call_references  [::jcm::bridge::json::string_list $calls] \
-        unresolved_dispatches [::jcm::bridge::json::list_v $udisp_json] \
-        decorators       [::jcm::bridge::json::string_list $decorators] \
-        keywords         [::jcm::bridge::json::string_list $keywords] \
-        parent_classes   [::jcm::bridge::json::list_v $parent_json] \
-        package_requires [::jcm::bridge::json::list_v $pr_json] \
-    ]]
-}
-
-proc ::jcm::bridge::_unresolved_entry_to_json {entry} {
-    set kind [dict get $entry kind]
-    set line 0
-    if {[dict exists $entry line]} { set line [dict get $entry line] }
-    set file ""
-    if {[dict exists $entry file]} { set file [dict get $entry file] }
-    set snippet ""
-    if {[dict exists $entry snippet]} { set snippet [dict get $entry snippet] }
-    set pairs [list \
-        kind    [::jcm::bridge::json::string_v $kind] \
-        line    [::jcm::bridge::json::int_v $line] \
-        file    [::jcm::bridge::json::string_v $file]]
-    if {$snippet ne ""} {
-        lappend pairs snippet [::jcm::bridge::json::string_v $snippet]
-    }
-    # Pass through any other keys (e.g. resolves_to from pragma_dynamic).
-    foreach {k v} $entry {
-        if {$k in {kind line file snippet}} continue
-        lappend pairs $k [::jcm::bridge::json::string_v $v]
-    }
-    return [::jcm::bridge::json::object_v $pairs]
-}
-
-proc ::jcm::bridge::_class_entry_to_json {entry} {
-    set name [dict get $entry name]
-    set line 0
-    if {[dict exists $entry line]} { set line [dict get $entry line] }
-    return [::jcm::bridge::json::object_v [list \
-        name [::jcm::bridge::json::string_v $name] \
-        line [::jcm::bridge::json::int_v $line]]]
-}
-
-proc ::jcm::bridge::_pkg_entry_to_json {entry} {
-    set name [dict get $entry name]
-    set version_v [::jcm::bridge::json::null_v]
-    if {[dict exists $entry version]} {
-        set ver [dict get $entry version]
-        if {$ver ne "" && $ver ne "null"} {
-            set version_v [::jcm::bridge::json::string_v $ver]
-        }
-    }
-    return [::jcm::bridge::json::object_v [list \
-        name    [::jcm::bridge::json::string_v $name] \
-        version [::jcm::bridge::json::raw_v $version_v]]]
 }
 
 # ---------------------------------------------------------------------------

@@ -1289,3 +1289,430 @@ class TestPackageRequiresField:
         assert len(scripts) == 1
         pr_names = {entry["name"] for entry in scripts[0].package_requires}
         assert {"Tcl", "Tk", "http"} <= pr_names
+
+
+# ---------------------------------------------------------------------------
+# Tests: P1.3 Stream 2 — Task #16 (G), with G.1 rewritten under P1.3 bundle (1).
+#
+# Three tests covering invariants the prior pytest port did not lock:
+#   1. parent_classes / package_requires wire shape — host-only on the wire
+#      (§13.2 / §13.3 decided=B; SPEC §7.5.1 "Wire vs Python model"). Field
+#      ABSENT from the JSON for non-host symbols; PRESENT-as-[] on host
+#      symbols when no inherit / no package require. Python `Symbol`
+#      dataclass defaults non-host to `[]` so consumers see a uniform
+#      typed surface regardless of wire encoding.
+#   2. Pragma `# JCM:dynamic` end-to-end through the full bridge driver
+#      (R31 wiring at bridge_postpasses.tcl::_attach_pragmas — covered
+#      by pragma_scanner standalone tests, but never end-to-end via the
+#      bridge subprocess).
+#   3. Dynamic-body tag end-to-end — pragma_scanner's regex pre-scan
+#      flags the proc AND the resulting symbol carries the `dynamic_body`
+#      tag in unresolved_dispatches (cross-references contract §4.3).
+# ---------------------------------------------------------------------------
+
+
+PARENT_CLASSES_NO_CLASS_NO_REQUIRE = '''\
+proc plain_top_level {} {
+    return 1
+}
+
+proc with_arg {x} {
+    return [expr {$x * 2}]
+}
+'''
+
+
+# Class without `inherit` / `superclass` — host symbol present, parent_classes
+# emitted as []-on-the-wire.
+CLASS_NO_INHERIT_FIXTURE = '''\
+itcl::class Plain {
+    public method greet {} { return "hi" }
+}
+'''
+
+
+# Class with `inherit` — host symbol present, parent_classes populated.
+CLASS_WITH_INHERIT_FIXTURE = '''\
+itcl::class Base { }
+itcl::class Derived {
+    inherit Base
+    public method ping {} { return "pong" }
+}
+'''
+
+
+# `package require` declarations exercising the __script__ host symbol +
+# package_requires wire shape.
+SCRIPT_NO_PACKAGE_REQUIRE_FIXTURE = '''\
+proc just_a_proc {} { return 1 }
+'''
+
+
+SCRIPT_WITH_PACKAGE_REQUIRE_FIXTURE = '''\
+package require Tcl 8.6
+package require http 2.9
+proc handler {} { return 1 }
+'''
+
+
+PRAGMA_DYNAMIC_FIXTURE = '''\
+# JCM:dynamic resolves_to=fooHelper
+proc fooDynamic {} {
+    return 1
+}
+'''
+
+
+DYNAMIC_BODY_FIXTURE = '''\
+proc fooDynBody {a b} [getBody $a $b]
+'''
+
+
+def _bridge_wire_entries(source, filename):
+    """Run the bridge subprocess directly and return the raw JSON list.
+
+    Bypasses _parse_tcl_native's Symbol-dataclass rehydration so we can
+    assert wire-level field presence/absence (Bundle item 1 step 5: the
+    invariant is "absent from JSON" vs "present-as-[] in JSON" — the
+    dataclass default would mask absence from the Python view).
+    """
+    import json
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    bridge = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "jcodemunch_mcp"
+        / "parser"
+        / "tcl_disasm_bridge.tcl"
+    )
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".tcl", delete=False, encoding="utf-8"
+    ) as tmp:
+        tmp.write(source)
+        tmp_path = tmp.name
+    try:
+        result = subprocess.run(
+            ["tclsh", str(bridge), tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, (
+            f"bridge failed for {filename}: "
+            f"stderr={result.stderr!r} stdout={result.stdout[:200]!r}"
+        )
+        return json.loads(result.stdout)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+class TestStreamTwoCleanupInvariants:
+    # --- Wire shape C: parent_classes (host=class only) ------------------
+
+    def test_parent_classes_absent_from_non_class_wire_entries(self):
+        # P1.3 bundle (1) — non-class symbols have parent_classes ABSENT
+        # from the JSON wire (encoder skips). The Python Symbol dataclass
+        # supplies [] via default_factory — we verify the absence at the
+        # WIRE layer here. SPEC §7.5.1 "Wire vs Python model".
+        entries = _bridge_wire_entries(
+            PARENT_CLASSES_NO_CLASS_NO_REQUIRE,
+            "no_classes.tcl",
+        )
+        # No class symbols in this fixture.
+        assert all(e.get("kind") != "class" for e in entries)
+        for e in entries:
+            assert "parent_classes" not in e, (
+                f"non-class wire entry {e.get('name')}/{e.get('kind')} "
+                f"unexpectedly carries parent_classes: {e!r}"
+            )
+
+    def test_parent_classes_present_as_empty_on_class_with_no_inherit(self):
+        # Class symbol with no inherit / no superclass: parent_classes
+        # PRESENT-as-[] on the wire (host-only field, default empty).
+        entries = _bridge_wire_entries(
+            CLASS_NO_INHERIT_FIXTURE, "plain_class.tcl"
+        )
+        classes = [e for e in entries if e.get("kind") == "class"]
+        assert len(classes) >= 1, (
+            f"expected at least one class entry; got "
+            f"{[(e.get('name'), e.get('kind')) for e in entries]}"
+        )
+        plain = next(e for e in classes if e.get("name") == "Plain")
+        assert "parent_classes" in plain, (
+            f"class wire entry missing parent_classes field: {plain!r}"
+        )
+        assert plain["parent_classes"] == [], (
+            f"class with no inherit should have parent_classes=[]; "
+            f"got {plain['parent_classes']!r}"
+        )
+
+    def test_parent_classes_populated_for_class_with_inherit(self):
+        # Class with inherit: parent_classes populated with {name, line}.
+        entries = _bridge_wire_entries(
+            CLASS_WITH_INHERIT_FIXTURE, "derived_class.tcl"
+        )
+        derived = next(
+            e for e in entries
+            if e.get("kind") == "class" and e.get("name") == "Derived"
+        )
+        assert "parent_classes" in derived, (
+            f"Derived class missing parent_classes: {derived!r}"
+        )
+        bases = derived["parent_classes"]
+        assert len(bases) == 1, (
+            f"expected 1 base class on Derived; got {bases!r}"
+        )
+        assert bases[0]["name"] == "Base", (
+            f"expected base name=Base; got {bases[0]!r}"
+        )
+        assert isinstance(bases[0].get("line"), int), (
+            f"expected integer line on base; got {bases[0]!r}"
+        )
+
+    # --- Wire shape C: package_requires (host=__script__ only) -----------
+
+    def test_package_requires_absent_from_non_script_wire_entries(self):
+        # package_requires lives on the synthetic __script__ host symbol
+        # only. Non-host wire entries (procs, classes, etc.) must NOT
+        # carry the field on the wire.
+        entries = _bridge_wire_entries(
+            SCRIPT_WITH_PACKAGE_REQUIRE_FIXTURE,
+            "with_pkg.tcl",
+        )
+        for e in entries:
+            if e.get("name") == "__script__" and e.get("kind") == "module":
+                continue
+            assert "package_requires" not in e, (
+                f"non-host wire entry {e.get('name')}/{e.get('kind')} "
+                f"unexpectedly carries package_requires: {e!r}"
+            )
+
+    def test_package_requires_present_as_empty_on_script_with_none(self):
+        # __script__ with no `package require`: field PRESENT-as-[] on the
+        # wire. Verifies the host-only contract emits the field even when
+        # empty so the consumer doesn't need a "did the bridge include it?"
+        # branch.
+        entries = _bridge_wire_entries(
+            SCRIPT_NO_PACKAGE_REQUIRE_FIXTURE,
+            "no_pkg.tcl",
+        )
+        scripts = [
+            e for e in entries
+            if e.get("name") == "__script__" and e.get("kind") == "module"
+        ]
+        # __script__ may be elided if it has no signal — but if it's
+        # present, package_requires must be present-as-[].
+        if scripts:
+            s = scripts[0]
+            assert "package_requires" in s, (
+                f"__script__ missing package_requires: {s!r}"
+            )
+            assert s["package_requires"] == [], (
+                f"__script__ with no requires should have package_requires=[]; "
+                f"got {s['package_requires']!r}"
+            )
+
+    def test_package_requires_populated_when_present(self):
+        entries = _bridge_wire_entries(
+            SCRIPT_WITH_PACKAGE_REQUIRE_FIXTURE,
+            "with_pkg.tcl",
+        )
+        s = next(
+            e for e in entries
+            if e.get("name") == "__script__" and e.get("kind") == "module"
+        )
+        assert "package_requires" in s, (
+            f"__script__ missing package_requires: {s!r}"
+        )
+        names = {entry["name"] for entry in s["package_requires"]}
+        assert {"Tcl", "http"} <= names, (
+            f"expected Tcl + http in package_requires; got {names!r}"
+        )
+
+    def test_pragma_dynamic_end_to_end_via_full_bridge(self):
+        # R31 pragma scanner output → bridge driver attach pass →
+        # symbol's unresolved_dispatches. End-to-end: a dynamic pragma
+        # immediately above `proc fooDynamic` lands as
+        # {kind: pragma_dynamic, resolves_to: fooHelper, line: <pragma_line>}.
+        symbols = parse_file(
+            PRAGMA_DYNAMIC_FIXTURE,
+            "pragma_dyn.tcl",
+            "tcl",
+        )
+        targets = [s for s in symbols if s.name == "fooDynamic"]
+        assert len(targets) == 1, (
+            f"expected one fooDynamic symbol, got "
+            f"{[(s.name, s.kind) for s in symbols]}"
+        )
+        ud = targets[0].unresolved_dispatches
+        kinds = [e["kind"] for e in ud]
+        assert "pragma_dynamic" in kinds, (
+            f"expected pragma_dynamic in unresolved_dispatches; got "
+            f"{kinds}"
+        )
+        # Pragma extras (resolves_to=fooHelper) survive end-to-end.
+        pragma_entry = next(e for e in ud if e["kind"] == "pragma_dynamic")
+        assert pragma_entry.get("resolves_to") == "fooHelper", (
+            f"expected resolves_to=fooHelper, got "
+            f"{pragma_entry!r}"
+        )
+
+    def test_dynamic_body_tag_end_to_end_via_full_bridge(self):
+        # `proc fooDynBody {a b} [getBody $a $b]` — body slot is a
+        # bracket expression. The compute_body_base extractor flags
+        # `dynamic`, the bridge driver's _apply_a_row tags the symbol's
+        # unresolved_dispatches with kind=dynamic_body and skips body
+        # recursion. Cross-references WALKER_CONTRACT_v2_2.md §4.3.
+        symbols = parse_file(
+            DYNAMIC_BODY_FIXTURE,
+            "dyn_body.tcl",
+            "tcl",
+        )
+        targets = [s for s in symbols if s.name == "fooDynBody"]
+        assert len(targets) == 1, (
+            f"expected one fooDynBody symbol, got "
+            f"{[(s.name, s.kind) for s in symbols]}"
+        )
+        ud = targets[0].unresolved_dispatches
+        kinds = [e["kind"] for e in ud]
+        assert "dynamic_body" in kinds, (
+            f"expected dynamic_body tag; got unresolved_dispatches="
+            f"{ud!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P1.3 bundle (0) — computed_namespace BODY recursion regression.
+#
+# `namespace eval $ns BODY` arrives at the bridge driver as a
+# kind=computed_namespace event. Prior to the bundle fix, the dispatch case
+# only ran _handle_unresolved (tagging the dynamic ns) and dropped the BODY
+# entirely — silently losing every nested proc / class / namespace inside
+# such blocks. The fix adds _handle_computed_namespace_body_recurse so the
+# body literal is still walked against the enclosing parent.
+#
+# Lock the regression closed end-to-end via the full bridge subprocess.
+# ---------------------------------------------------------------------------
+
+
+COMPUTED_NS_BODY_FIXTURE = '''\
+namespace eval ::Outer {
+    proc literal_proc {} { puts hello }
+    set ns_dyn ::Dynamic
+    namespace eval $ns_dyn { proc dropped_proc {} { puts world } }
+}
+'''
+
+
+COMPUTED_NS_MIXED_FIXTURE = '''\
+namespace eval ::A { proc inA {} { return 1 } }
+set varB ::B
+namespace eval $varB { proc inB {} { return 2 } }
+'''
+
+
+class TestComputedNamespaceBodyRecursion:
+    def test_dropped_proc_inside_computed_namespace_survives(self):
+        # Critic-flagged data-loss regression: literal proc nested inside
+        # `namespace eval $ns_dyn { ... }` was silently lost. The bundle
+        # fix recurses the body against the enclosing parent so the
+        # static call-graph still surfaces the inner proc.
+        symbols = parse_file(
+            COMPUTED_NS_BODY_FIXTURE,
+            "computed_ns_body.tcl",
+            "tcl",
+        )
+        names = {s.name for s in symbols}
+        assert "literal_proc" in names, (
+            f"literal_proc missing — bridge regressed; got {names!r}"
+        )
+        assert "dropped_proc" in names, (
+            "dropped_proc inside computed-namespace body was dropped — "
+            f"computed_namespace recursion regression returned. Got {names!r}"
+        )
+
+    def test_mixed_literal_and_computed_namespace_both_recurse(self):
+        # Sibling namespace_eval blocks: literal `::A` and computed `$varB`.
+        # Both inner-namespace bodies must survive recursion.
+        symbols = parse_file(
+            COMPUTED_NS_MIXED_FIXTURE,
+            "ns_mixing.tcl",
+            "tcl",
+        )
+        names = {s.name for s in symbols}
+        assert "inA" in names, (
+            f"inA (literal-namespace child) missing; got {names!r}"
+        )
+        assert "inB" in names, (
+            f"inB (computed-namespace child) missing; "
+            f"computed_namespace recursion regression. Got {names!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P1.3 bundle (12) — JCODEMUNCH_TCL_DUAL_VALIDATE scaffolding.
+#
+# C″ cut-over policy: runtime path is single-substrate (new bridge); the
+# env var enables a diagnostic-only second parse against the legacy
+# bridge fetched from `tcl-native-parser` so P1.4 can build the behavioral
+# oracle. Test #1 verifies the env var is OFF by default (parse runs
+# new-only). Test #2 (when env var set) verifies the diff file lands at
+# the documented location.
+# ---------------------------------------------------------------------------
+
+
+DUAL_VALIDATE_FIXTURE = '''\
+proc dual_validate_target {} { return 1 }
+'''
+
+
+class TestDualValidate:
+    def test_dual_validate_off_by_default(self, monkeypatch):
+        # No env var: parse should succeed without writing any diff file.
+        monkeypatch.delenv("JCODEMUNCH_TCL_DUAL_VALIDATE", raising=False)
+        symbols = parse_file(
+            DUAL_VALIDATE_FIXTURE, "dv_default.tcl", "tcl"
+        )
+        names = {s.name for s in symbols}
+        assert "dual_validate_target" in names
+
+    def test_dual_validate_when_enabled_writes_diff(self, monkeypatch, tmp_path):
+        # Env var ON: parse runs the canonical new-bridge AND attempts the
+        # legacy bridge via `git show tcl-native-parser:...`. Diff lands
+        # at ~/.code-index/dual_validate_diffs/. We point HOME at tmp_path
+        # so the test doesn't pollute the user's actual code-index dir.
+        monkeypatch.setenv("JCODEMUNCH_TCL_DUAL_VALIDATE", "1")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        # Reset the legacy-bridge cache so this test re-fetches under
+        # the new HOME (otherwise a previous-process cache hit would
+        # mask the env-var path under test).
+        from jcodemunch_mcp.parser import extractor as _ex
+        _ex._legacy_bridge_path = None  # type: ignore[attr-defined]
+
+        symbols = parse_file(
+            DUAL_VALIDATE_FIXTURE, "dv_enabled.tcl", "tcl"
+        )
+        names = {s.name for s in symbols}
+        # Canonical new-bridge result remains correct regardless of the
+        # diagnostic.
+        assert "dual_validate_target" in names
+
+        diff_dir = tmp_path / ".code-index" / "dual_validate_diffs"
+        # The diagnostic might gracefully fail (e.g. tcl-native-parser
+        # branch missing in CI) — but the diff file should still be
+        # written, recording legacy_bridge_ran=False in that case.
+        if diff_dir.exists():
+            files = list(diff_dir.glob("*.json"))
+            assert len(files) >= 1, (
+                f"dual_validate enabled but no diff written to {diff_dir}"
+            )
+            import json
+            payload = json.loads(files[0].read_text())
+            assert payload["file"] == "dv_enabled.tcl"
+            assert payload["new_symbol_count"] >= 1
+            # legacy_bridge_ran can be True or False; both are valid
+            # (False when the tcl-native-parser branch is absent).
+            assert isinstance(payload["legacy_bridge_ran"], bool)

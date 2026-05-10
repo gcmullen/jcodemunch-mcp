@@ -450,11 +450,12 @@ class TestMigrationV8ToV9:
             assert "branch_meta" in tables
 
             # Verify version was updated to current INDEX_VERSION (migration chain
-            # runs v8→v9→v10; the final stored version equals INDEX_VERSION).
+            # runs v8→v9 only; INDEX_VERSION is 9 — fork-only Tcl-bridge
+            # extensions track on a separate axis via JCM_TCL_INDEX_VERSION).
             version = conn.execute(
                 "SELECT value FROM meta WHERE key='index_version'"
             ).fetchone()[0]
-            assert version == "10"
+            assert version == "9"
         finally:
             conn.close()
 

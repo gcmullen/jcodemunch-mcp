@@ -1,0 +1,423 @@
+{
+  "small": {
+    "files": [
+      {
+        "name": "BluIceWidgets/Admin.tcl",
+        "loc": 112,
+        "new_po_median": 0.04953356343321502,
+        "old_po_median": 0.040416163858026266,
+        "new_e2e_median": 0.04753646347671747,
+        "old_e2e_median": 0.038419063901528716,
+        "parse_ratio": 1.2255879505837397,
+        "e2e_ratio": 1.2373144644689267,
+        "n_syms": 10
+      },
+      {
+        "name": "BluIceWidgets/pkgIndex.tcl",
+        "loc": 114,
+        "new_po_median": 0.3425443423911929,
+        "old_po_median": 0.09320158883929253,
+        "new_e2e_median": 0.3382392057683319,
+        "old_e2e_median": 0.0888964522164315,
+        "parse_ratio": 3.67530582533139,
+        "e2e_ratio": 3.804867318493642,
+        "n_syms": 1
+      },
+      {
+        "name": "DcsWidgets/UserAlignBeamStatus.tcl",
+        "loc": 127,
+        "new_po_median": 0.05054492619819939,
+        "old_po_median": 0.03948266291990876,
+        "new_e2e_median": 0.052607723977416754,
+        "old_e2e_median": 0.041545460699126124,
+        "parse_ratio": 1.2801802730664498,
+        "e2e_ratio": 1.2662688797316266,
+        "n_syms": 9
+      },
+      {
+        "name": "dcss/scripts/devices/beam_size_sample_x_dummy.tcl",
+        "loc": 35,
+        "new_po_median": 0.039566350635141134,
+        "old_po_median": 0.022323897574096918,
+        "new_e2e_median": 0.04210038832388818,
+        "old_e2e_median": 0.024857935262843966,
+        "parse_ratio": 1.772376463554964,
+        "e2e_ratio": 1.693639792634633,
+        "n_syms": 7
+      },
+      {
+        "name": "dcss/scripts/devices/mirror_vert_chin_bl11.tcl",
+        "loc": 76,
+        "new_po_median": 0.04354122909717262,
+        "old_po_median": 0.033937662839889526,
+        "new_e2e_median": 0.047745267394930124,
+        "old_e2e_median": 0.03814170113764703,
+        "parse_ratio": 1.2829766534776015,
+        "e2e_ratio": 1.251786521598117,
+        "n_syms": 5
+      },
+      {
+        "name": "dcss/scripts/devices/undulator_monitor.tcl",
+        "loc": 205,
+        "new_po_median": 0.09789172909222543,
+        "old_po_median": 0.13032762799412012,
+        "new_e2e_median": 0.09216237510554492,
+        "old_e2e_median": 0.12459827400743961,
+        "parse_ratio": 0.7511203157679041,
+        "e2e_ratio": 0.7396761780186619,
+        "n_syms": 13
+      },
+      {
+        "name": "dcss/scripts/operations/checkGapOwnership.tcl",
+        "loc": 11,
+        "new_po_median": 0.0308358920738101,
+        "old_po_median": 0.015277080703526735,
+        "new_e2e_median": 0.03026842256076634,
+        "old_e2e_median": 0.014709611190482974,
+        "parse_ratio": 2.0184413941527186,
+        "e2e_ratio": 2.0577309739056746,
+        "n_syms": 2
+      },
+      {
+        "name": "dcss/scripts/operations/gapHarmonic.tcl",
+        "loc": 7,
+        "new_po_median": 0.029903480550274253,
+        "old_po_median": 0.011975719360634685,
+        "new_e2e_median": 0.029706440633162856,
+        "old_e2e_median": 0.011778679443523288,
+        "parse_ratio": 2.497009127365643,
+        "e2e_ratio": 2.522051879890276,
+        "n_syms": 2
+      },
+      {
+        "name": "dcss/scripts/operations/optimizeTable.tcl",
+        "loc": 174,
+        "new_po_median": 0.14981746929697692,
+        "old_po_median": 0.09943465748801827,
+        "new_e2e_median": 0.14445515838451684,
+        "old_e2e_median": 0.09407234657555819,
+        "parse_ratio": 1.5066926671420344,
+        "e2e_ratio": 1.5355751572380685,
+        "n_syms": 2
+      },
+      {
+        "name": "dcss/scripts/operations/table_vert_1_encoder_op.tcl",
+        "loc": 8,
+        "new_po_median": 0.0281046899035573,
+        "old_po_median": 0.012142745777964592,
+        "new_e2e_median": 0.028308831388130784,
+        "old_e2e_median": 0.012346887262538075,
+        "parse_ratio": 2.31452510144442,
+        "e2e_ratio": 2.292790950964876,
+        "n_syms": 2
+      },
+      {
+        "name": "dhs-tcl/main/scripts/base/devices/DeviceBase.tcl",
+        "loc": 49,
+        "new_po_median": 0.043924767058342695,
+        "old_po_median": 0.02421818394213915,
+        "new_e2e_median": 0.04332064790651202,
+        "old_e2e_median": 0.023614064790308475,
+        "parse_ratio": 1.813710192444054,
+        "e2e_ratio": 1.8345273586397286,
+        "n_syms": 9
+      },
+      {
+        "name": "dhs-tcl/main/scripts/galil/devices/GalilInputKeyValueStatus.tcl",
+        "loc": 32,
+        "new_po_median": 0.037936213659122586,
+        "old_po_median": 0.021055669523775578,
+        "new_e2e_median": 0.04216202301904559,
+        "old_e2e_median": 0.025281478883698583,
+        "parse_ratio": 1.801710157745679,
+        "e2e_ratio": 1.6677039825479327,
+        "n_syms": 5
+      }
+    ],
+    "parse_ratio_median": 1.7870433106503216,
+    "e2e_ratio_median": 1.680671887591283
+  },
+  "medium": {
+    "files": [
+      {
+        "name": "BluIceWidgets/Anneal.tcl",
+        "loc": 783,
+        "new_po_median": 0.2749472581781447,
+        "old_po_median": 0.6135867901612073,
+        "new_e2e_median": 0.27515525463968515,
+        "old_e2e_median": 0.6137947866227478,
+        "parse_ratio": 0.44809839877078833,
+        "e2e_ratio": 0.4482854215065235,
+        "n_syms": 39
+      },
+      {
+        "name": "BluIceWidgets/BluIce.tcl",
+        "loc": 1106,
+        "new_po_median": 0.3436968717724085,
+        "old_po_median": 0.4261446096934378,
+        "new_e2e_median": 0.3346076274756342,
+        "old_e2e_median": 0.41705536539666355,
+        "parse_ratio": 0.8065263855376675,
+        "e2e_ratio": 0.8023098495744975,
+        "n_syms": 75
+      },
+      {
+        "name": "BluIceWidgets/IonChamberFile.tcl",
+        "loc": 610,
+        "new_po_median": 0.23869975632987916,
+        "old_po_median": 0.25191979738883674,
+        "new_e2e_median": 0.22532158088870347,
+        "old_e2e_median": 0.23854162194766104,
+        "parse_ratio": 0.9475228179921386,
+        "e2e_ratio": 0.9445797301493228,
+        "n_syms": 24
+      },
+      {
+        "name": "BluIceWidgets/RunSequenceView.tcl",
+        "loc": 700,
+        "new_po_median": 0.2494665770791471,
+        "old_po_median": 0.3008754134643823,
+        "new_e2e_median": 0.24972103745676577,
+        "old_e2e_median": 0.30112987384200096,
+        "parse_ratio": 0.8291358014491903,
+        "e2e_ratio": 0.8292801848938816,
+        "n_syms": 24
+      },
+      {
+        "name": "BluIceWidgets/bluice.tcl",
+        "loc": 703,
+        "new_po_median": 0.2261216219048947,
+        "old_po_median": 0.2953401377890259,
+        "new_e2e_median": 0.24442755640484393,
+        "old_e2e_median": 0.3136460722889751,
+        "parse_ratio": 0.7656311925554226,
+        "e2e_ratio": 0.779310114171118,
+        "n_syms": 35
+      },
+      {
+        "name": "DcsWidgets/DetectorBase.tcl",
+        "loc": 528,
+        "new_po_median": 0.04271632246673107,
+        "old_po_median": 0.14336432609707117,
+        "new_e2e_median": 0.04959131102077663,
+        "old_e2e_median": 0.15023931465111673,
+        "parse_ratio": 0.29795642772252906,
+        "e2e_ratio": 0.3300821168942148,
+        "n_syms": 19
+      },
+      {
+        "name": "DcsWidgets/Persistent.tcl",
+        "loc": 1058,
+        "new_po_median": 0.35551837901584804,
+        "old_po_median": 0.6580227396916598,
+        "new_e2e_median": 0.35535327438265085,
+        "old_e2e_median": 0.6578576350584626,
+        "parse_ratio": 0.5402828163392027,
+        "e2e_ratio": 0.5401674396483538,
+        "n_syms": 46
+      },
+      {
+        "name": "dcss/scripts/devices/attenuation.tcl",
+        "loc": 1414,
+        "new_po_median": 1.56657424592413,
+        "old_po_median": 0.8010484813712537,
+        "new_e2e_median": 1.5650202804245055,
+        "old_e2e_median": 0.7994945158716291,
+        "parse_ratio": 1.9556547229731105,
+        "e2e_ratio": 1.9575122147251764,
+        "n_syms": 101
+      },
+      {
+        "name": "dcss/scripts/operations/alignFrontEnd.tcl",
+        "loc": 672,
+        "new_po_median": 0.29639785178005695,
+        "old_po_median": 0.8843319036532193,
+        "new_e2e_median": 0.3017078919801861,
+        "old_e2e_median": 0.8896419438533485,
+        "parse_ratio": 0.3351658472974034,
+        "e2e_ratio": 0.33913406855952,
+        "n_syms": 9
+      },
+      {
+        "name": "dcss/scripts/operations/collectFrameMARCCD.tcl",
+        "loc": 748,
+        "new_po_median": 0.2745175380259752,
+        "old_po_median": 0.45242650457657874,
+        "new_e2e_median": 0.2701006077695638,
+        "old_e2e_median": 0.4480095743201673,
+        "parse_ratio": 0.6067671439428451,
+        "e2e_ratio": 0.6028902578241286,
+        "n_syms": 13
+      },
+      {
+        "name": "dcss/scripts/operations/loopFast.tcl",
+        "loc": 1591,
+        "new_po_median": 0.6417662252206355,
+        "old_po_median": 1.130347401369363,
+        "new_e2e_median": 0.6413372110109776,
+        "old_e2e_median": 1.1299183871597052,
+        "parse_ratio": 0.5677601633295797,
+        "e2e_ratio": 0.5675960479084846,
+        "n_syms": 27
+      },
+      {
+        "name": "dcss/scripts/operations/runTimer.tcl",
+        "loc": 979,
+        "new_po_median": 0.4489967410918325,
+        "old_po_median": 1.0577380182221532,
+        "new_e2e_median": 0.43910136236809194,
+        "old_e2e_median": 1.0478426394984126,
+        "parse_ratio": 0.42448766457927506,
+        "e2e_ratio": 0.4190527716817131,
+        "n_syms": 13
+      }
+    ],
+    "parse_ratio_median": 0.5872636536362124,
+    "e2e_ratio_median": 0.5852431528663067
+  },
+  "large": {
+    "files": [
+      {
+        "name": "BluIceWidgets/CassetteView.tcl",
+        "loc": 4064,
+        "new_po_median": 1.2969287177547812,
+        "old_po_median": 2.4355507609434426,
+        "new_e2e_median": 1.3121190899983048,
+        "old_e2e_median": 2.450741133186966,
+        "parse_ratio": 0.5324991531904673,
+        "e2e_ratio": 0.5353968529071095,
+        "n_syms": 150
+      },
+      {
+        "name": "BluIceWidgets/ListSelection.tcl",
+        "loc": 2285,
+        "new_po_median": 0.7083122704643756,
+        "old_po_median": 1.1233724614139646,
+        "new_e2e_median": 0.7120356333907694,
+        "old_e2e_median": 1.1270958243403584,
+        "parse_ratio": 0.6305230854358298,
+        "e2e_ratio": 0.631743653036328,
+        "n_syms": 95
+      },
+      {
+        "name": "BluIceWidgets/QueueView.tcl",
+        "loc": 3994,
+        "new_po_median": 1.16466079861857,
+        "old_po_median": 2.1206840109080076,
+        "new_e2e_median": 1.1526795311365277,
+        "old_e2e_median": 2.1087027434259653,
+        "parse_ratio": 0.54919110656184,
+        "e2e_ratio": 0.5466296919895847,
+        "n_syms": 133
+      },
+      {
+        "name": "BluIceWidgets/RobotView.tcl",
+        "loc": 4620,
+        "new_po_median": 1.5697500370442867,
+        "old_po_median": 3.1021558507345617,
+        "new_e2e_median": 1.590448748320341,
+        "old_e2e_median": 3.122854562010616,
+        "parse_ratio": 0.5060190759508696,
+        "e2e_ratio": 0.5092932497299355,
+        "n_syms": 133
+      },
+      {
+        "name": "BluIceWidgets/SequenceActions.tcl",
+        "loc": 2435,
+        "new_po_median": 0.28484140895307064,
+        "old_po_median": 1.1058854369912297,
+        "new_e2e_median": 0.29411735269241035,
+        "old_e2e_median": 1.1151613807305694,
+        "parse_ratio": 0.2575686408603368,
+        "e2e_ratio": 0.26374420579353897,
+        "n_syms": 105
+      },
+      {
+        "name": "BluIceWidgets/SpectrometerView.tcl",
+        "loc": 2081,
+        "new_po_median": 0.6777231541927904,
+        "old_po_median": 0.9045034274458885,
+        "new_e2e_median": 0.6873640604317188,
+        "old_e2e_median": 0.914144333684817,
+        "parse_ratio": 0.7492764909764091,
+        "e2e_ratio": 0.7519207143810963,
+        "n_syms": 71
+      },
+      {
+        "name": "DcsWidgets/Entry.tcl",
+        "loc": 2069,
+        "new_po_median": 0.608150691492483,
+        "old_po_median": 0.733037551632151,
+        "new_e2e_median": 0.5938968805130571,
+        "old_e2e_median": 0.7187837406527251,
+        "parse_ratio": 0.8296310197729979,
+        "e2e_ratio": 0.8262525248188577,
+        "n_syms": 125
+      },
+      {
+        "name": "DcsWidgets/RasterGroupBase.tcl",
+        "loc": 6950,
+        "new_po_median": 2.4211463034152985,
+        "old_po_median": 3.0165133140981197,
+        "new_e2e_median": 2.4486299813725054,
+        "old_e2e_median": 3.0439969920553267,
+        "parse_ratio": 0.8026307366520526,
+        "e2e_ratio": 0.8044127467153555,
+        "n_syms": 278
+      },
+      {
+        "name": "DcsWidgets/tcltls-1.7.16/tests/tlsIO.test",
+        "loc": 2075,
+        "new_po_median": 0.21861469955183566,
+        "old_po_median": 0.5763468113727868,
+        "new_e2e_median": 0.25707552349194884,
+        "old_e2e_median": 0.6148076353129,
+        "parse_ratio": 0.3793110246088158,
+        "e2e_ratio": 0.41813977043585826,
+        "n_syms": 8
+      },
+      {
+        "name": "dcss/scripts/operations/CG.tcl",
+        "loc": 5638,
+        "new_po_median": 2.069687152048573,
+        "old_po_median": 7.350727000972256,
+        "new_e2e_median": 2.084297503810376,
+        "old_e2e_median": 7.365337352734059,
+        "parse_ratio": 0.2815622389152559,
+        "e2e_ratio": 0.28298737776575456,
+        "n_syms": 77
+      },
+      {
+        "name": "dcss/scripts/operations/centerCrystal.tcl",
+        "loc": 2898,
+        "new_po_median": 1.0129978025797755,
+        "old_po_median": 2.032281683990732,
+        "new_e2e_median": 0.9887414430268109,
+        "old_e2e_median": 2.0080253244377673,
+        "parse_ratio": 0.49845344302399136,
+        "e2e_ratio": 0.4923949070730228,
+        "n_syms": 67
+      },
+      {
+        "name": "dcss/scripts/operations/gridGroupConfig.tcl",
+        "loc": 3883,
+        "new_po_median": 1.482241555582732,
+        "old_po_median": 2.298851514933631,
+        "new_e2e_median": 1.4625036069191992,
+        "old_e2e_median": 2.279113566270098,
+        "parse_ratio": 0.6447748129680856,
+        "e2e_ratio": 0.6416984342349694,
+        "n_syms": 79
+      }
+    ],
+    "parse_ratio_median": 0.5408451298761536,
+    "e2e_ratio_median": 0.5410132724483471
+  },
+  "overall": {
+    "parse_ratio_median": 0.7583757541616634,
+    "e2e_ratio_median": 0.7656154142761071,
+    "parse_ratio_p95": 2.31452510144442,
+    "e2e_ratio_p95": 2.292790950964876,
+    "delta_median_ms": 0.019518425688147545
+  }
+}

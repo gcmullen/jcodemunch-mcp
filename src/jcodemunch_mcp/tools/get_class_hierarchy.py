@@ -1,47 +1,17 @@
 """Traverse class inheritance chains from indexed symbol signatures."""
 
-import re
 import time
 from collections import deque
 from typing import Optional
 
 from ..storage import IndexStore
+from ._class_helpers import _parse_bases, get_bases as _get_bases
 from ._utils import resolve_repo
 
-# Patterns to extract base class / interface names from signatures
-_EXTENDS_RE = re.compile(
-    r'\bextends\s+([\w$][\w$,\s]*?)(?=\s+implements|\s*[{(<]|$)', re.IGNORECASE
-)
-_IMPLEMENTS_RE = re.compile(
-    r'\bimplements\s+([\w$][\w$,\s]*?)(?=\s*[{(<]|$)', re.IGNORECASE
-)
-# Python / Ruby style: class Foo(Bar, Baz)
-_PAREN_BASES_RE = re.compile(r'\bclass\s+\w[\w$]*\s*\(([^)]+)\)')
-
-
-def _parse_bases(signature: str) -> list[str]:
-    """Extract base class / interface names from a class signature."""
-    bases: list[str] = []
-
-    # extends Foo, Bar
-    m = _EXTENDS_RE.search(signature)
-    if m:
-        bases += [n.strip() for n in m.group(1).split(",") if n.strip()]
-
-    # implements Foo, Bar
-    m = _IMPLEMENTS_RE.search(signature)
-    if m:
-        bases += [n.strip() for n in m.group(1).split(",") if n.strip()]
-
-    # class Foo(Bar, Baz)  — Python / Ruby
-    if not bases:
-        m = _PAREN_BASES_RE.search(signature)
-        if m:
-            candidates = [n.strip() for n in m.group(1).split(",") if n.strip()]
-            # Filter out obviously non-class args (e.g. Generic[T], *args)
-            bases += [c for c in candidates if re.match(r'^[A-Z][\w.]*$', c)]
-
-    return bases
+# Re-exports for back-compat: tests import _parse_bases directly from this
+# module; other consumers (find_references, get_call_hierarchy) import the
+# shared helpers from ._class_helpers.
+__all__ = ["get_class_hierarchy", "_parse_bases", "_get_bases"]
 
 
 def _build_class_maps(symbols: list[dict]) -> tuple[dict[str, dict], dict[str, list[str]]]:
@@ -59,7 +29,7 @@ def _build_class_maps(symbols: list[dict]) -> tuple[dict[str, dict], dict[str, l
 
     children_of: dict[str, list[str]] = {}
     for sym in class_syms:
-        for base in _parse_bases(sym.get("signature", "")):
+        for base in _get_bases(sym):
             if base in class_by_name:
                 children_of.setdefault(base, []).append(sym["name"])
 
@@ -117,10 +87,10 @@ def get_class_hierarchy(
             "signature": sym.get("signature", ""),
         }
 
-    # Ancestors: walk up via _parse_bases, BFS
+    # Ancestors: walk up via _get_bases (side-table-first), BFS
     ancestors: list[dict] = []
     visited_up: set[str] = {class_name}
-    queue: deque = deque(_parse_bases(target.get("signature", "")))
+    queue: deque = deque(_get_bases(target))
     while queue:
         base_name = queue.popleft()
         if base_name in visited_up:
@@ -129,7 +99,7 @@ def get_class_hierarchy(
         if base_name in class_by_name:
             sym = class_by_name[base_name]
             ancestors.append(_fmt(sym))
-            queue.extend(_parse_bases(sym.get("signature", "")))
+            queue.extend(_get_bases(sym))
         else:
             # External base (not in index) — record name only
             ancestors.append({"name": base_name, "file": "(external)", "line": 0, "signature": ""})

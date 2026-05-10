@@ -148,6 +148,7 @@ Tree-sitter grammar lacks clean named fields for these — custom regex extracto
 | `JCODEMUNCH_STATS_FILE_INTERVAL` | 3 | Calls between session_stats.json writes; 0 = disable |
 | `JCODEMUNCH_PERF_TELEMETRY` | 0 | Set 1 to enable persistent perf SQLite sink at ~/.code-index/telemetry.db (per-tool latency + ok flag + repo). In-memory ring is always tracked; the env var only controls durable persistence. |
 | `JCODEMUNCH_PERF_TELEMETRY_MAX_ROWS` | 100000 | Rolling cap on persisted perf rows; oldest rows trimmed in 1k-row batches once exceeded. |
+| `JCODEMUNCH_TCL_PARSE_TIMEOUT` | 30 | Per-file timeout in seconds for `tcl_disasm_bridge.tcl` subprocess in `_parse_tcl_native`. Raise for large generated TCL files (CAD/lithography vendor scripts) that exceed the default disasm budget. |
 | `ANTHROPIC_API_KEY` | — | Enables Claude Haiku summaries (`pip install jcodemunch-mcp[anthropic]`) |
 | `GOOGLE_API_KEY` | — | Enables Gemini Flash summaries (`pip install jcodemunch-mcp[gemini]`) |
 | `OPENAI_API_BASE` | — | Local LLM endpoint (Ollama, LM Studio) |

@@ -1,4 +1,4 @@
-"""Tests for Task 1: call_references data model — Symbol field, INDEX_VERSION 9, SQLite storage."""
+"""Tests for Task 1: call_references data model — Symbol field, INDEX_VERSION, SQLite storage."""
 
 import json
 import pytest
@@ -56,11 +56,16 @@ class TestCallReferencesSymbolField:
 
 
 class TestIndexVersionBump:
-    """INDEX_VERSION is bumped to 10 (TCL bridge schema additions)."""
+    """INDEX_VERSION stays at 9 (lockstep with upstream).
+
+    Fork-only Tcl-bridge extension data tracks on a separate axis via
+    JCM_TCL_INDEX_VERSION + the jcm_tcl_extensions side-table — see
+    test_storage_jcm_tcl_extensions.py.
+    """
 
     def test_index_version_is_9(self):
-        """INDEX_VERSION constant must be 10 after TCL bridge schema bump."""
-        assert INDEX_VERSION == 10
+        """INDEX_VERSION constant must be 9 (lockstep with upstream)."""
+        assert INDEX_VERSION == 9
 
 
 class TestCallersByNameIndex:

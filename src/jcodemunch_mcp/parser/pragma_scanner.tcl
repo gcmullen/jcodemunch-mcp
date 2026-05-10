@@ -22,7 +22,7 @@
 # definitions whose body argument is a bracket expression (dynamic body). Each
 # match is a candidate site the walker should also tag as unresolved_dispatches:
 # dynamic_body. Disagreement between this list and the walker output is a bridge
-# bug (§4.3 of WALKER_CONTRACT_v2_2.md). The comparison and logger.warning live
+# bug (§4.3 of dev-docs/verdicts/WALKER_CONTRACT_v2_2.md). The comparison and logger.warning live
 # in the bridge driver; we provide the site list in a consumable shape.
 #
 # Phase-1 note: # JCM:ignore over a package require does NOT suppress the

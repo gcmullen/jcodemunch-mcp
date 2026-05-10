@@ -1,0 +1,12 @@
+# computed_namespace fixture: namespace eval $ns BODY (P1.3 §13.6 Shape A)
+# Locks the higher-priority dispatch row that catches `namespace eval $var
+# BODY` before the literal-namespace_eval row. Predicate:
+#   op==invokeReplace AND last slot LITERAL=="::tcl::namespace::eval"
+#   AND at least one interior slot is VAR
+# Emits kind=computed_namespace consumed by unresolved_detector via the
+# bridge driver's eval_var/interp_eval/var_command/computed_namespace
+# unresolved-family handler.
+set ns ::Foo
+namespace eval $ns { proc x {} {} }
+---
+  computed_namespace  cmd=2 src_start=505 src_end=539

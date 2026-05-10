@@ -11,9 +11,10 @@
 # Adding a new unresolved kind is a one-row change.  The dispatcher is a
 # trivial loop; the rows carry all the knowledge.
 #
-# Contract reference: WALKER_CONTRACT_v2_2.md §4.1 (dispatch to detector
-# after recursion-table classifier), PLAN_v2.1 §4 (tag conventions §4.1-§4.6),
-# PLAN_v2.1 §2.3 (unresolved rows in the opcode dispatch table).
+# Contract reference: dev-docs/verdicts/WALKER_CONTRACT_v2_2.md §4.1
+# (dispatch to detector after recursion-table classifier),
+# dev-docs/plans/PLAN_v2.1.md §4 (tag conventions §4.1-§4.6),
+# dev-docs/plans/PLAN_v2.1.md §2.3 (unresolved rows in the opcode dispatch table).
 #
 # Walker event kinds handled here (SPEC §4 numbering):
 #   eval_var       → §4.1  {kind eval_var       line N file F snippet S}

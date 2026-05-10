@@ -27,6 +27,91 @@ def _build_adjacency(
     return adj
 
 
+def _collect_tcl_package_edges(symbols: list[dict]) -> dict[str, list[str]]:
+    """Build Tcl-specific {file: ["package:NAME", ...]} from indexed __script__ symbols.
+
+    Tcl `package require X` is a package-name lookup, not a file-path import,
+    so it never resolves through ``resolve_specifier``. The Tcl bridge stores
+    these on the synthetic ``__script__`` symbol's ``package_requires`` field
+    (persisted via the ``jcm_tcl_extensions`` side-table). This helper turns
+    each declared package into a virtual ``"package:NAME"`` node, preserving
+    declaration order and deduplicating per-file.
+
+    Returns ``{}`` if no Tcl __script__ symbols carry package_requires data.
+    Cross-language base behavior is unaffected — non-Tcl files do not appear
+    in the returned map.
+    """
+    adj: dict[str, list[str]] = {}
+    for sym in symbols or []:
+        if not isinstance(sym, dict):
+            continue
+        if sym.get("language") != "tcl":
+            continue
+        if sym.get("name") != "__script__":
+            continue
+        pkg_reqs = sym.get("package_requires") or []
+        if not pkg_reqs:
+            continue
+        file_path = sym.get("file")
+        if not file_path:
+            continue
+        targets: list[str] = []
+        for entry in pkg_reqs:
+            if isinstance(entry, dict):
+                pkg_name = entry.get("name")
+            else:
+                pkg_name = getattr(entry, "name", None)
+            if not pkg_name or not isinstance(pkg_name, str):
+                continue
+            target = f"package:{pkg_name}"
+            if target not in targets:
+                targets.append(target)
+        if targets:
+            existing = adj.get(file_path, [])
+            merged = list(dict.fromkeys(existing + targets))
+            adj[file_path] = merged
+    return adj
+
+
+def _merge_adjacency(
+    base: dict[str, list[str]], extra: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    """Merge ``extra`` adjacency entries into ``base`` without duplicating targets."""
+    merged: dict[str, list[str]] = {k: list(v) for k, v in base.items()}
+    for src, targets in extra.items():
+        existing = merged.get(src, [])
+        merged[src] = list(dict.fromkeys(existing + targets))
+    return merged
+
+
+def _file_tcl_package_requires(symbols: list[dict], file_path: str) -> list[str]:
+    """Return Tcl package names required by ``file_path`` (deduped, declaration order).
+
+    Reads the ``__script__`` symbol's ``package_requires`` for the given file.
+    Returns ``[]`` for non-Tcl files or files without a Tcl __script__ symbol.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for sym in symbols or []:
+        if not isinstance(sym, dict):
+            continue
+        if sym.get("file") != file_path:
+            continue
+        if sym.get("language") != "tcl":
+            continue
+        if sym.get("name") != "__script__":
+            continue
+        for entry in sym.get("package_requires") or []:
+            if isinstance(entry, dict):
+                pkg_name = entry.get("name")
+            else:
+                pkg_name = getattr(entry, "name", None)
+            if pkg_name and isinstance(pkg_name, str) and pkg_name not in seen:
+                seen.add(pkg_name)
+                out.append(pkg_name)
+    return out
+
+
 def _invert(adj: dict[str, list[str]]) -> dict[str, list[str]]:
     """Invert adjacency list: {file: [importers_of_file]}."""
     inv: dict[str, list[str]] = {}
@@ -107,6 +192,16 @@ def get_dependency_graph(
 
     source_files = frozenset(index.source_files)
     fwd = _build_adjacency(index.imports, source_files, index.alias_map, getattr(index, "psr4_map", None))
+
+    # ADDITIVE: Tcl `package require X` edges from indexed __script__ symbols.
+    # These supplement the path-based file-to-file edges with virtual
+    # ``package:NAME`` nodes since Tcl package_require is a name lookup, not a
+    # file path. Non-Tcl languages are unaffected — _collect_tcl_package_edges
+    # only emits entries for symbols where language=="tcl" and name=="__script__".
+    tcl_pkg_adj = _collect_tcl_package_edges(getattr(index, "symbols", []) or [])
+    if tcl_pkg_adj:
+        fwd = _merge_adjacency(fwd, tcl_pkg_adj)
+
     rev = _invert(fwd)
 
     nodes_out: set[str] = set()
@@ -180,6 +275,45 @@ def get_dependency_graph(
         except Exception:
             import logging as _logging
             _logging.getLogger(__name__).debug("cross_repo dependency graph failed", exc_info=True)
+
+    # ADDITIVE: Tcl cross-repo edges from `package require` declarations.
+    # Tcl `package require X` doesn't go through index.imports' specifier path
+    # (resolve_specifier can't map a package name to a file), so we walk the
+    # file's __script__ symbol's package_requires directly. Non-Tcl languages
+    # are not touched — only fires for Tcl files with package_requires data.
+    if cross_repo:
+        try:
+            from .list_repos import list_repos
+            all_repos_data = list_repos(storage_path=storage_path).get("repos", [])
+            repo_id = f"{owner}/{name}"
+            file_pkg_reqs = _file_tcl_package_requires(getattr(index, "symbols", []) or [], file)
+            seen_targets: set[tuple[str, str]] = {
+                (e["to_repo"], e["package_name"]) for e in cross_repo_edges
+            }
+            for pkg_name in file_pkg_reqs:
+                for repo_entry in all_repos_data:
+                    other_repo_id = repo_entry.get("repo", "")
+                    if not other_repo_id or other_repo_id == repo_id or "/" not in other_repo_id:
+                        continue
+                    other_owner, other_name = other_repo_id.split("/", 1)
+                    other_index = store.load_index(other_owner, other_name)
+                    if not other_index:
+                        continue
+                    other_pkg_names = getattr(other_index, "package_names", []) or []
+                    if pkg_name in other_pkg_names and (other_repo_id, pkg_name) not in seen_targets:
+                        cross_repo_edges.append({
+                            "from": file,
+                            "to": f"package:{pkg_name}",
+                            "from_repo": repo_id,
+                            "to_repo": other_repo_id,
+                            "package_name": pkg_name,
+                            "cross_repo": True,
+                        })
+                        seen_targets.add((other_repo_id, pkg_name))
+                        break
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).debug("cross_repo Tcl dependency graph failed", exc_info=True)
 
     elapsed = (time.perf_counter() - start) * 1000
     result = {

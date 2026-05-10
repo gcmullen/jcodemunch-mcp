@@ -4,9 +4,67 @@ import time
 from typing import Optional
 
 from ..storage import IndexStore
+from ._call_graph import build_symbols_by_file, bfs_callers, bfs_callees
+from ._class_helpers import collect_class_kin
 from ._utils import resolve_repo
 from .get_blast_radius import _build_reverse_adjacency, _find_symbol
-from ._call_graph import build_symbols_by_file, bfs_callers, bfs_callees
+
+
+def _inheritance_aliases(index, sym: dict) -> list[dict]:
+    """Return method symbols on ancestor/descendant classes with the same name.
+
+    Used by ``get_call_hierarchy`` to surface inheritance-aware callers and
+    callees: at runtime a call to ``Animal.foo`` could dispatch to ``Dog.foo``
+    (descendant override) or, conversely, ``Animal.foo`` if invoked on a
+    ``Dog`` receiver could trace back to ``Animal.foo`` (ancestor lookup).
+
+    Cross-language via the dual-path dispatch (Tcl side-table + signature
+    regex).  Returns ``[]`` for non-method symbols, methods whose ``parent``
+    field is missing or doesn't resolve to a class, or methods on classes
+    with no kin in the index.
+
+    The primary symbol itself is *not* included in the returned list.
+    """
+    if sym.get("kind") not in ("method", "function"):
+        return []
+    parent_id = sym.get("parent")
+    if not parent_id:
+        return []
+    symbol_index: dict[str, dict] = getattr(index, "_symbol_index", {}) or {}
+    parent_sym = symbol_index.get(parent_id)
+    if not parent_sym or parent_sym.get("kind") not in ("class", "type"):
+        return []
+    parent_name = parent_sym.get("name", "")
+    if not parent_name:
+        return []
+
+    kin_names = collect_class_kin(index.symbols, parent_name)
+    if not kin_names:
+        return []
+
+    method_name = sym.get("name", "")
+    sym_id = sym.get("id", "")
+    aliases: list[dict] = []
+    seen_ids: set[str] = {sym_id} if sym_id else set()
+
+    for s in index.symbols:
+        if s.get("name") != method_name:
+            continue
+        if s.get("kind") not in ("method", "function"):
+            continue
+        s_parent_id = s.get("parent")
+        if not s_parent_id:
+            continue
+        s_parent = symbol_index.get(s_parent_id)
+        if not s_parent or s_parent.get("name", "") not in kin_names:
+            continue
+        sid = s.get("id", "")
+        if sid in seen_ids:
+            continue
+        seen_ids.add(sid)
+        aliases.append(s)
+
+    return aliases
 
 
 def get_call_hierarchy(
@@ -82,17 +140,63 @@ def get_call_hierarchy(
     callees: list[dict] = []
     depth_reached = 0
 
+    # Inheritance-aware sibling methods (same name, kin classes via the
+    # dual-path get_bases dispatch).  At runtime a call dispatched on the
+    # parent class could land on any of these via override or super-class
+    # lookup, so they're treated as additional resolution targets.
+    alias_syms = _inheritance_aliases(index, sym)
+    alias_caller_tags: dict[str, str] = {}
+    alias_callee_tags: dict[str, str] = {}
+
+    def _merge(
+        base: list[dict],
+        addition: list[dict],
+        tag_map: dict[str, str],
+        alias_class: str,
+    ) -> list[dict]:
+        """Append entries from *addition* to *base*, deduping by id and
+        tagging each new entry with ``inheritance_via=<alias_class>``."""
+        seen = {e.get("id") for e in base if e.get("id")}
+        for entry in addition:
+            eid = entry.get("id")
+            if not eid or eid in seen:
+                continue
+            seen.add(eid)
+            entry = dict(entry)
+            entry["inheritance_via"] = alias_class
+            base.append(entry)
+            tag_map[eid] = alias_class
+        return base
+
     if direction in ("callers", "both"):
         callers, dr = bfs_callers(
             index, store, owner, name, sym, reverse_adj, symbols_by_file, depth
         )
         depth_reached = max(depth_reached, dr)
+        for alias in alias_syms:
+            alias_callers, alias_dr = bfs_callers(
+                index, store, owner, name, alias, reverse_adj, symbols_by_file, depth
+            )
+            symbol_index = getattr(index, "_symbol_index", {}) or {}
+            alias_class_sym = symbol_index.get(alias.get("parent", "")) or {}
+            alias_class = alias_class_sym.get("name", "")
+            callers = _merge(callers, alias_callers, alias_caller_tags, alias_class)
+            depth_reached = max(depth_reached, alias_dr)
 
     if direction in ("callees", "both"):
         callees, dr = bfs_callees(
             index, store, owner, name, sym, symbols_by_file, depth
         )
         depth_reached = max(depth_reached, dr)
+        for alias in alias_syms:
+            alias_callees, alias_dr = bfs_callees(
+                index, store, owner, name, alias, symbols_by_file, depth
+            )
+            symbol_index = getattr(index, "_symbol_index", {}) or {}
+            alias_class_sym = symbol_index.get(alias.get("parent", "")) or {}
+            alias_class = alias_class_sym.get("name", "")
+            callees = _merge(callees, alias_callees, alias_callee_tags, alias_class)
+            depth_reached = max(depth_reached, alias_dr)
 
     elapsed = (time.perf_counter() - start) * 1000
 
@@ -177,6 +281,19 @@ def get_call_hierarchy(
         r = edge.get("resolution", "unknown")
         resolution_counts[r] = resolution_counts.get(r, 0) + 1
 
+    inheritance_aliases_meta = [
+        {
+            "id": a.get("id", ""),
+            "name": a.get("name", ""),
+            "class": (
+                getattr(index, "_symbol_index", {}) or {}
+            ).get(a.get("parent", ""), {}).get("name", ""),
+            "file": a.get("file", ""),
+            "line": a.get("line", 0),
+        }
+        for a in alias_syms
+    ]
+
     return {
         "repo": f"{owner}/{name}",
         "symbol": {
@@ -200,6 +317,7 @@ def get_call_hierarchy(
             "confidence_level": confidence,
             "source": source,
             "resolution_tiers": resolution_counts,
+            "inheritance_aliases": inheritance_aliases_meta,
             "tip": tip,
         },
     }

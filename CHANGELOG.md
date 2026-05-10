@@ -4,6 +4,43 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased] — TCL bridge rewrite (P1.2)
 
+### `get_dependency_graph` now surfaces Tcl `package require` edges (P1.3)
+
+Stream 1's spot-check found that `get_dependency_graph` returned
+``{nodes: 1, edges: 0}`` for 25/25 sampled Tcl files because Tcl
+``package require X`` is a package-name lookup, not a file-path
+import — ``resolve_specifier`` had no way to map a package name to
+a source file in the index, so the dependency graph was empty.
+
+`get_dependency_graph` now reads the indexed ``__script__`` symbol's
+``package_requires`` field (persisted via the ``jcm_tcl_extensions``
+side-table from P1.2) and emits **virtual ``package:NAME`` nodes**
+for each declared package. These coexist with the existing
+file-to-file edge logic (no resolution against ``index.imports``),
+so a Tcl file with ``package require Tk`` now reports
+``{file → "package:Tk"}`` instead of an empty graph.
+
+**Cross-language base behavior is fully preserved.** Python / JS /
+Java / Go / Rust / C# / etc. continue to use the unchanged
+``resolve_specifier`` path against ``index.imports``; the new Tcl
+adjacency is additive and only fires for symbols where
+``language=="tcl"`` and ``name=="__script__"``.
+
+When ``cross_repo=True`` and another indexed repo's
+``package_names`` (from ``extract_package_names`` / Tcl
+``__script__`` package_requires registry) contains the required
+package, a ``cross_repo_edges`` entry is emitted with shape
+``{from, to: "package:NAME", from_repo, to_repo, package_name,
+cross_repo: True}`` — matching the existing cross-repo edge schema
+used by Python/JS callers.
+
+**Known limitation**: Tcl ``package provide NAME`` statements are
+not yet captured by the bridge, so intra-repo file→file resolution
+(file A provides X, file B requires X) is deferred. Same-repo
+``package require`` always resolves to a virtual ``package:NAME``
+node today; cross-repo resolution against ``package_names`` lights
+up the cross-language path.
+
 ### **BREAKING CHANGE**: TCL parsing now requires tclsh 8.6+
 
 The `tcl_disasm_bridge.tcl` is now the canonical TCL parser per
@@ -31,28 +68,149 @@ jcodemunch-mcp requires tclsh 8.6 to parse TCL files.
 If you do not need TCL indexing, ensure your repos contain no `.tcl`
 or `.itcl` files (or remove TCL from your indexing scope).
 
-### Schema additions (INDEX_VERSION 9 → 10)
+### Schema additions wired through to storage
+
+P1.2 added two new fields to the `Symbol` dataclass — `parent_classes`
+and `package_requires` — populated by the bridge but **never persisted
+to disk**. `_migrate_v9_to_v10` was a pure version-stamp,
+`_SCHEMA_SQL` was untouched, and the symbol serialization paths
+(`_symbol_to_row`, `_row_to_symbol_dict`, `_symbol_to_dict`,
+`_symbol_to_dict_for_delta`) silently dropped both fields.  No
+round-trip storage test existed to catch the gap.  P1.3 close
+discovered the regression during the architect review pass; this
+release wires the fields through end-to-end via a new
+`jcm_tcl_extensions` side-table.
 
 - **`parent_classes: list[{name, line}]`** on class symbols. Captures
   iTcl `inherit` and TclOO `superclass` declarations with their
-  source-line numbers. Always present, always a list, empty → `[]`.
-  Powers `get_class_hierarchy` runtime-free queries.
+  source-line numbers. Empty → `[]`.  Powers `get_class_hierarchy`
+  runtime-free queries for Tcl symbols via the side-table; non-Tcl
+  languages (Python, JS, Java, C#, Ruby, Go, ...) continue to use
+  the cross-language `_parse_bases` signature-regex extractor that
+  has always served them.  Both paths live behind a single
+  `_get_bases()` dispatch in `get_class_hierarchy.py`.
 - **`package_requires: list[{name, version|null}]`** on the file's
   `__script__` symbol. Captures `package require NAME ?VERSION?`
-  declarations. Always present, always a list. `version` is `null`
-  when source omits it. Powers version-aware `get_dependency_graph`
-  queries.
+  declarations.  `version` is `null` when source omits it.  Powers
+  version-aware `get_dependency_graph` queries.
 - `package require` ALSO emits the existing `kind=import` symbol —
   both sources populated from the same parse for backward
   compatibility with `find_importers`.
 
-### Reindex required
+### Consumer wire-ups for the new schema fields
 
-INDEX_VERSION bumps 9 → 10. Existing indexes are still loadable but
-TCL repos will lack `parent_classes` and `package_requires` data until
-re-indexed. Run `jcodemunch-mcp index-folder` (or `index`) on each
-affected repo. The storage layer rejects indexes newer than the running
-version with a clear warning.
+The `parent_classes` and `package_requires` fields are now read by
+three downstream tools.  All three rely on a shared
+`tools/_class_helpers.py` module that holds the dual-path
+`get_bases()` dispatch (Tcl side-table + signature regex), so the
+Tcl additions are purely additive — Python / JS / Java / C# / Ruby
+/ Go inheritance resolution is unchanged.
+
+- **`get_class_hierarchy`** (already wired during P1.3) — uses
+  `_class_helpers.get_bases` indirectly via the same dispatch
+  formerly inlined as `_get_bases`.  Behavior unchanged; the
+  helper extraction collapses three duplicate copies into one.
+- **`package_registry`** — `extract_package_names` accepts an
+  optional `symbols=` iterable.  When supplied, an index-aware
+  Tcl handler reads `package_requires` from the synthetic
+  `__script__` symbol (Tcl has no manifest file format).  The
+  handler picks the first declared package name; multi-package
+  Tcl repos surface additional names via existing iteration in
+  `build_package_registry`.  `index_folder` passes
+  `symbols=all_symbols` automatically; legacy file-only callers
+  see no behaviour change (`symbols` defaults to `None`).
+- **`find_references`** — new optional `include_descendants=True`
+  flag.  When the `identifier` argument names a class symbol,
+  the response gains `descendants` and `descendant_count` fields
+  listing every class S whose `get_bases(S)` chain transitively
+  includes the target.  Each entry carries
+  `match_type="inheritance_descendant"` plus `ancestor_class` /
+  `descendant_class` / `file` / `line`.  Cross-language: works
+  for Tcl (side-table) and Python / JS / Java / etc. (signature
+  regex) via the same dispatch.
+- **`get_call_hierarchy`** — when querying a method symbol whose
+  parent is a class C, callers and callees of same-named methods
+  on kin classes (ancestors + descendants of C, walked via the
+  shared `collect_class_kin` helper) are merged into the result.
+  Each merged entry is tagged with
+  `inheritance_via=<kin_class_name>`.  The response's `_meta`
+  envelope gains an `inheritance_aliases` list documenting which
+  kin methods were treated as additional resolution targets.
+  Behaviour for non-method symbols and methods on classes with
+  no kin is unchanged (no traversal, empty `inheritance_aliases`).
+
+The MCP wire-level surface (`server.py`) does not yet expose the
+new `find_references(include_descendants=...)` flag; the Python
+tools API is wired end-to-end and the flag works for direct
+callers.  Surfacing it in the JSON-RPC schema is left for a
+follow-up — `server.py` is outside this branch's editing scope.
+
+### Storage shape
+
+- New side-table `jcm_tcl_extensions` (created via per-call
+  `CREATE TABLE IF NOT EXISTS` mirroring `embedding_store.py` — NOT
+  via `_SCHEMA_SQL`, so the `_initialized_dbs` cache cannot mask
+  out-of-band drops). Hybrid columns: typed `parent_classes TEXT`
+  and `package_requires TEXT` for the stable fields, plus
+  `extras_json TEXT` reserved for Phase-2 prototype work.
+- Cascade on symbol removal is explicit: `incremental_save` issues
+  `DELETE FROM jcm_tcl_extensions WHERE symbol_id IN (SELECT id FROM
+  symbols WHERE file IN (…))` ahead of the symbols delete.  `PRAGMA
+  foreign_keys` is not set globally, so there is no implicit FK
+  CASCADE — the explicit DELETE is load-bearing.
+- `INDEX_VERSION` returns to **9** (lockstep with upstream).  The
+  speculative bump to 10 was undone — `_migrate_v9_to_v10` is deleted
+  and removed from the migration ladder.
+- Fork-extension data tracks on a separate axis: `JCM_TCL_INDEX_VERSION
+  = 1` stored under the existing `meta` table as
+  `jcm_tcl_writer_version`.  Cross-direction load guard is **Strict-A**
+  (P1.3 close, "failures rather than fallbacks" directive): any DB
+  without an exact-match stamp is refused with a clear WARNING, forcing
+  re-index.  This includes upstream-built indexes (no stamp), older-fork
+  indexes (stamp < constant), and newer-fork indexes (stamp > constant).
+  Legacy indexes loaded via JSON→SQLite migration or the v4→v9
+  migration ladder are stamped automatically at migration time so they
+  satisfy the gate without a manual re-index.
+- Branch-delta wire format (`_symbol_to_dict_for_delta`,
+  `save_branch_delta`, `compose_branch_index`) intentionally omits
+  the fork-extension fields — wiring deferred to v2.0; locked by an
+  explicit no-op test (`test_branch_delta_does_not_carry_fork_extension_data`)
+  so the deferral cannot silently regress.
+
+### Reindex required (strict)
+
+`INDEX_VERSION` returns to 9 (in lockstep with upstream). Indexes built
+without the fork-extension stamp (`meta.jcm_tcl_writer_version`) are refused
+at load time and force a re-index. This includes:
+
+- Existing dev-local v10 indexes built between P1.2 and P1.3 close
+- Indexes built by upstream code without fork-extension data
+- Indexes built by older or newer fork versions when `JCM_TCL_INDEX_VERSION`
+  changes
+
+**Exception — legacy migration is transparent**: indexes loaded from
+legacy JSON files (v2/v3/v4 format) or migrated via the v4→v9 schema
+ladder in `_connect` are automatically stamped with
+`jcm_tcl_writer_version` at migration time. These indexes load cleanly
+without a manual re-index; the stamp signals that the DB has been
+validated by the current fork code even though it pre-dates the
+side-table.
+
+Strict-A applies to the **storage layer**: any DB lacking the
+fork-extension stamp is refused — there is no silent degrade, no
+runtime fallback to a stale or missing side-table.  This guarantees
+100% accuracy and deterministic behaviour for the Tcl bridge path;
+the trade-off is one mandatory re-index on fork install for indexes
+built directly by upstream code.
+
+Strict-A does NOT remove cross-language base-code functionality.
+`get_class_hierarchy` continues to support Python / JS / Java / C# /
+Ruby / Go / etc. via the existing `_parse_bases` signature-regex
+extractor — that path has always been the indexed-data shape for
+non-Tcl class symbols and is correct for those languages.  The
+`_get_bases()` dispatcher reads the side-table for Tcl class symbols
+(populated structurally) and falls through to the regex for
+everything else.
 
 ### TCL bridge internals (no user-visible behaviour change)
 
@@ -67,8 +225,154 @@ version with a clear warning.
   `# JCM:dynamic`, `# JCM:export`, `# JCM:ignore` markers and
   dynamic-body proc sites (`proc NAME ARGS [...]`). Output wired onto
   symbols by the bridge driver.
+- P1.3 Stream 3 — three-tier opcode coverage. `STACK_EFFECTS` (Tier 1,
+  62 hand-classified rows for dispatch + stack effects) is now backed
+  by an auto-extracted `tclInstructionTable[]` (Tier 2, 129 additional
+  opcodes from stock Tcl 8.6.14 generic/tclCompile.c) loaded lazily on
+  first miss. Tier 2 hits apply canonical pop/push counts but emit no
+  dispatch event — the abstract stack stays sound across previously-
+  unrecognized opcodes (strneq, arrayExistsStk, add, sub, mult, div,
+  over, strindex, verifyDict, listNotIn, lshift, etc.). Tier 3 (opcode
+  in neither table) triggers the §3.1.4 unknown_opcode boundary
+  recovery path; with both tables present, Tier 3 is empty for stock
+  Tcl 8.6. Walker-only orphan vs the Tcl 8.6.14 instruction table:
+  exactly one row — `pushString` (Tier 1 hand-classified
+  `PUSH_LITERAL` over a `string` operand). It exists in the walker
+  table because the same opcode value is sometimes used for a
+  literal-pool string push the walker treats as a Tier-1 push; the
+  tclInstructionTable surfaces its mainline metadata under a
+  different opcode name. Documented inline in `opcode_walker.tcl`
+  next to the row.
+- P1.3 Stream 3 — Tier 2 contract: delta-correct, not shape-correct.
+  Tier 2 entries supply pop_count / push_count for stack-balance
+  tracking but DO NOT preserve slot-shape information (e.g. binary
+  `add` produces a single-EXPR-pop-then-push instead of pop=2 /
+  push=1 with EXPR shape preservation). Today this is invisible
+  because no dispatch row consumes Tier 2 outputs at slot[-2]
+  depth; if a future row needs slot-shape preservation for a Tier
+  2 opcode, the affected opcode must be **promoted to Tier 1
+  hand-classification** (`STACK_EFFECTS` row + corresponding shape
+  rules). See SPEC_v2 §3.4 + WALKER_CONTRACT §3.2.
+- P1.3 Stream 3 — §13.6 C-2 split: two new invokeReplace dispatch
+  rows fired BEFORE `namespace_eval` first-match-wins.
+  `computed_namespace` (Shape A) catches `namespace eval $var BODY`
+  and emits `kind=computed_namespace` consumed by the bridge driver's
+  existing unresolved-family handler. `ensemble_fqn_rewrite` (Shape B)
+  catches stock ensembles routed via invokeReplace
+  (`::tcl::clock::format`, `::tcl::dict::for`, etc.) and emits
+  `kind=ensemble` so the bridge driver's existing ensemble handler
+  runs unchanged — events carry an extra `bytecode_form=invokeReplace`
+  field for audit signal. Cross-codebase corpus recognition rate on
+  `/usr/share/tcltk` improved from **39 unrecognized / 14,215 events**
+  (baseline) to **0 unrecognized / 14,187 events** after Stream 3.
+  Two new fixtures (`23_computed_namespace.test`,
+  `24_ensemble_fqn_rewrite.test`) lock both shapes.
+- P1.3 bundle (CRITICAL #0) — **computed_namespace body recursion
+  regression fix**. Stream 3's `kind=computed_namespace` event was
+  initially routed only through the unresolved-dispatch tagging path
+  in the bridge driver, which silently dropped every proc / method /
+  class / call edge declared inside `namespace eval $var BODY` blocks
+  (a real-world idiom in tcllib's `dns/dns.tcl`, `oo/build.tcl`, etc.).
+  The bundle adds `_handle_computed_namespace_body_recurse` so the
+  body is walked alongside the unresolved tag — both signals are
+  orthogonal and now both fire. Two new fixtures
+  (`25_computed_namespace_body_recursion.test`,
+  `26_namespace_mixing.test`) plus pytest
+  `TestComputedNamespaceBodyRecursion` (2 tests) lock the regression.
+  Bluice was unaffected (corpus probe still 0/12,256) but the gap
+  was visible on `/usr/share/tcltk` once the cross-codebase coverage
+  came online.
 
-## [1.83.0] — 2026-05-08 — `get_file_outline` no longer drops nested symbols
+### P1.3 Stream 1 — corpus-scale verification + perf bench + cut-over policy
+
+The PLAN_v2.1 §3 Stream 1 deliverables close the P1.3 verdict:
+
+- **Per-repo corpus recognition.** All 5 bluice repos (BluIceWidgets,
+  DcsWidgets, dcs-lib-tcl, dhs-tcl, dcss/scripts) probed individually under
+  `validation/probes/p1_2_corpus_recognition_probe.tcl` — 0 unrecognized
+  events across 12,256 corpus events; matches the aggregate verdict.
+- **Real indexing per repo.** All 5 repos indexed end-to-end via
+  `jcodemunch-mcp index`; no crashes; symbol counts plausible (BluIce:
+  4,592 symbols / 332 classes; DcsWidgets: 3,810 / 225; dhs-tcl: 1,624 /
+  178; dcss: 4,848 symbols; dcs-lib-tcl: 116 / 10).
+- **Schema-pop SQL sanity check** (`validation/probes/p1_3_schema_pop_check.py`)
+  — first corpus-scale verification of the architect CRITICAL #1 fix
+  (jcm_tcl_extensions side-table). Apples-to-apples coverage (sum of
+  side-table entries vs anchored grep matches) is **near-perfect**:
+  - parent_classes: BluIce 373/368 (101.4%), DcsWidgets 204/188 (108.5%),
+    dhs-tcl 165/162 (101.9%), dcs-lib-tcl 6/6 (100%), dcss 0/0 (procedural
+    glue, no OO). The >100% numbers come from the bridge correctly
+    capturing non-anchored `inherit` inside class bodies that the
+    `^inherit` grep misses — i.e., the bridge sees more than grep, not
+    less.
+  - package_requires: BluIce 956/967 (98.9%), dcss 83/85 (97.6%),
+    DcsWidgets 290/330 (87.9%), dhs-tcl 37/52 (71.2%), dcs-lib-tcl
+    17/24 (70.8%). The ~70% bands on smaller repos surface a real
+    capture-rate variance worth a P1.4 follow-up — likely conditional
+    `package require` inside `if`/`catch`/`namespace eval $var` bodies.
+  - **Earlier "schema-pop SQL << grep" verdict in the original Stream 1
+    spot-check was a unit-mismatch error**: row count (109 files-with-
+    requires) was being compared against grep line count (967 total
+    statements). The corrected check above compares entries-summed-from-
+    JSON-arrays against grep, which is the right shape.
+  See `/tmp/p1_3_corpus_indexes/schema_pop_check_v2.json` for the
+  corrected per-repo data.
+- **Downstream-tool spot-checks**
+  (`validation/probes/p1_3_downstream_spotcheck.py`).
+  `get_class_hierarchy` returns plausible ancestors / descendants
+  for top-of-tree iTcl classes (e.g. `Dhs::OperationInstance` with
+  66 descendants, `DCS::Component` with 16). `package_registry`'s Tcl
+  handler reads top-5 packages from `__script__.package_requires`
+  matching the source (`Iwidgets`, `DCSUtil`, `Itcl` etc.). No crashes
+  observed across 4 tools × 5 repos.
+- **Performance bench** (`validation/probes/p1_3_perf_bench.py`,
+  `dev-docs/verdicts/P1_3_PERF_BENCH.md`). 36 bluice files stratified
+  by LoC (small / medium / large), N=5 warm runs per file, first run
+  discarded. Two-number policy: parse-only ratio (new / legacy) ≤ 1.5x,
+  end-to-end ratio ≤ 2.0x. **Verdict: PASS by 2× margin**: parse-only
+  median **0.758×**, end-to-end median **0.766×**. New bridge is FASTER
+  than the legacy bridge on real-world file sizes (medium 0.59×, large
+  0.54×). Small-bucket median (1.79×) is dominated by subprocess startup
+  tax — structural, not parsing-logic regression.
+
+- **Perf root-cause fix shipped mid-bench** (debugger pass, `+210/-532`
+  in `tcl_disasm_bridge.tcl`). The first bench run reported parse-only
+  median 1.533× (failing the gate by 2%). Profile revealed two issues:
+  - `byte_to_char` did O(N) forward linear-scan per call over a per-body
+    char→byte map. On 100% ASCII corpora (bluice) the map is identity
+    overhead. Fix: ASCII fast-path detection (`string is ascii`) returns
+    a sentinel; char/byte conversions return the offset directly. Multi-
+    byte path retained, with the linear scan replaced by binary search
+    for O(log N).
+  - Stream 2's "extract" of bridge_postpasses + tcl_disasm_bridge_json
+    was incomplete: the helper procs (JSON encoders + post-pass procs +
+    recurse procs, ~322 LoC) were defined in BOTH the bridge driver AND
+    the extracted modules, so every bridge invocation parsed and re-
+    defined them twice. The dedup adds the missing `source` directives
+    for the extracted modules and removes the duplicate definitions
+    from `tcl_disasm_bridge.tcl`.
+  Together: 1.533× → 0.758× on the same bench. JSON output byte-
+  identical pre/post on all three outliers. Remaining outlier
+  `BluIceWidgets/pkgIndex.tcl` at 3.68× is structural — `package
+  ifneeded` script bodies are inlined by the Tcl compiler and the
+  bytecode disassembler is proportionally expensive on them; only
+  ~5% of typical bluice files share this shape and the median already
+  passes by 2× margin. Documented as a P1.4 follow-up candidate
+  (would require disassembler-result caching to address; out of scope
+  for P1.3 close).
+- **Cut-over policy** documented at
+  `dev-docs/verdicts/P1_3_CUT_OVER_POLICY.md`. Decision: **hard cut**.
+  New bridge is the only TCL parser at runtime; legacy bridge lives only
+  on `tcl-native-parser` branch. `JCODEMUNCH_TCL_DUAL_VALIDATE=1` is the
+  diagnostic-only opt-in for P1.4 oracle building. Revisit only triggered
+  by F1 < 95% at P1.4 oracle.
+
+Stream 1 deliverables in tree:
+`validation/probes/p1_3_perf_bench.py`,
+`validation/probes/p1_3_schema_pop_check.py`,
+`validation/probes/p1_3_downstream_spotcheck.py`,
+`dev-docs/verdicts/P1_3_PERF_BENCH.md`,
+`dev-docs/verdicts/P1_3_CUT_OVER_POLICY.md`.
 
 Thanks to @sanyapuer (#278) for the diagnosis, fix, and the test discipline
 that goes with it.

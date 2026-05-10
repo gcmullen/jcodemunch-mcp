@@ -1135,6 +1135,161 @@ class TestFindReferences:
             )
 
 
+class TestFindReferencesIncludeDescendants:
+    """find_references include_descendants flag — class-base resolution.
+
+    Cross-language: works for Tcl (side-table parent_classes) and for
+    other languages (signature-derived bases) via the shared
+    ``_class_helpers.get_bases`` dispatch.
+    """
+
+    def test_python_class_descendants(self, tmp_path):
+        """Cross-language path: Python signatures via _parse_bases."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "animals.py",
+               "class Animal:\n    pass\n\n"
+               "class Mammal(Animal):\n    pass\n\n"
+               "class Dog(Mammal):\n    pass\n\n"
+               "class Cat(Mammal):\n    pass\n")
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        refs = find_references(
+            repo=result["repo"],
+            identifier="Animal",
+            storage_path=str(store),
+            include_descendants=True,
+        )
+        assert "error" not in refs
+        descendant_names = [d["descendant_class"] for d in refs["descendants"]]
+        assert "Mammal" in descendant_names
+        assert "Dog" in descendant_names
+        assert "Cat" in descendant_names
+        # All descendants must point at the queried ancestor
+        for d in refs["descendants"]:
+            assert d["ancestor_class"] == "Animal"
+            assert d["match_type"] == "inheritance_descendant"
+
+    def test_python_no_descendants_returns_empty_list(self, tmp_path):
+        """Class with no descendants: descendants list is empty (no error)."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "shapes.py",
+               "class Square:\n    pass\n\n"
+               "class Other:\n    pass\n")
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        refs = find_references(
+            repo=result["repo"],
+            identifier="Square",
+            storage_path=str(store),
+            include_descendants=True,
+        )
+        assert refs["descendants"] == []
+        assert refs["descendant_count"] == 0
+
+    def test_non_class_identifier_descendants_empty(self, tmp_path):
+        """When identifier doesn't name a class, descendants is empty."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "utils.py", "def helper():\n    pass\n")
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        refs = find_references(
+            repo=result["repo"],
+            identifier="helper",
+            storage_path=str(store),
+            include_descendants=True,
+        )
+        assert refs["descendants"] == []
+        assert refs["descendant_count"] == 0
+
+    def test_default_off_omits_descendants_field(self, tmp_path):
+        """When include_descendants=False (default), the field is absent."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "shapes.py", "class Square:\n    pass\n")
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        refs = find_references(
+            repo=result["repo"],
+            identifier="Square",
+            storage_path=str(store),
+        )
+        assert "descendants" not in refs
+        assert "descendant_count" not in refs
+
+    def test_tcl_class_descendants(self, tmp_path):
+        """Tcl path: side-table parent_classes drive descendant resolution.
+
+        Tcl class symbols carry parent_classes via the jcm_tcl_extensions
+        side-table (no signature-derived bases).  We construct synthetic
+        Tcl class symbols and round-trip them through IndexStore so the
+        side-table load wires parent_classes onto the loaded dicts; then
+        find_references with include_descendants must walk that path.
+        """
+        from jcodemunch_mcp.parser.symbols import Symbol
+        from jcodemunch_mcp.storage import IndexStore
+
+        store_path = tmp_path / "store"
+        store_path.mkdir()
+        store = IndexStore(base_path=str(store_path))
+
+        file_a = "src/animals.tcl"
+
+        # Synthetic Tcl class hierarchy: Animal -> Mammal -> {Dog, Cat}
+        animal = Symbol(
+            id=f"{file_a}::Animal#class",
+            file=file_a, name="Animal", qualified_name="Animal",
+            kind="class", language="tcl", signature="oo::class create Animal",
+            parent_classes=[],
+        )
+        mammal = Symbol(
+            id=f"{file_a}::Mammal#class",
+            file=file_a, name="Mammal", qualified_name="Mammal",
+            kind="class", language="tcl", signature="oo::class create Mammal",
+            parent_classes=[{"name": "Animal", "line": 1}],
+        )
+        dog = Symbol(
+            id=f"{file_a}::Dog#class",
+            file=file_a, name="Dog", qualified_name="Dog",
+            kind="class", language="tcl", signature="oo::class create Dog",
+            parent_classes=[{"name": "Mammal", "line": 1}],
+        )
+        cat = Symbol(
+            id=f"{file_a}::Cat#class",
+            file=file_a, name="Cat", qualified_name="Cat",
+            kind="class", language="tcl", signature="oo::class create Cat",
+            parent_classes=[{"name": "Mammal", "line": 1}],
+        )
+        store.save_index(
+            owner="local",
+            name="tclrepo",
+            source_files=[file_a],
+            symbols=[animal, mammal, dog, cat],
+            raw_files={file_a: "# placeholder Tcl content\n"},
+            languages={"tcl": 1},
+            file_languages={file_a: "tcl"},
+            source_root=str(tmp_path),
+        )
+
+        refs = find_references(
+            repo="local/tclrepo",
+            identifier="Animal",
+            storage_path=str(store_path),
+            include_descendants=True,
+        )
+        assert "error" not in refs
+        descendant_names = [d["descendant_class"] for d in refs["descendants"]]
+        assert "Mammal" in descendant_names
+        assert "Dog" in descendant_names
+        assert "Cat" in descendant_names
+
+
 # ---------------------------------------------------------------------------
 # Tests: imports persisted and loaded correctly
 # ---------------------------------------------------------------------------

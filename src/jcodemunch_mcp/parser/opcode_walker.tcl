@@ -1,7 +1,7 @@
 #!/usr/bin/env tclsh
 #
 # opcode_walker.tcl — P1.2 Strategy A flat-pc-stream rewrite per
-# WALKER_CONTRACT_v2_2.md.
+# dev-docs/verdicts/WALKER_CONTRACT_v2_2.md.
 #
 # Replaces the P1.1 per-command terminal-invoke walker with a single
 # flat-pc-ordered simulation that:
@@ -15,19 +15,31 @@
 # in STACK_EFFECTS; one row per pattern in DISPATCH. Adding either is
 # one entry.
 #
+# Three-tier opcode coverage (P1.3 Stream 3):
+#   Tier 1 — STACK_EFFECTS (this file): hand-classified rows used for
+#            stack effects AND dispatch matching.
+#   Tier 2 — TCL_INSTRUCTION_TABLE (validation/probes/INSTRUCTION_TABLE_8_6_14.tcl):
+#            auto-extracted from tclInstructionTable[] in tcl8.6.14
+#            generic/tclCompile.c. Used when STACK_EFFECTS misses —
+#            applies canonical pop/push from the Tcl compiler so the
+#            walker's abstract stack stays sound. NO dispatch event
+#            emitted (semantic context unknown).
+#   Tier 3 — opcode in neither table: unknown_opcode boundary recovery
+#            (reset stack + suppress until next startCommand). With
+#            both tables present, Tier 3 is empty for stock Tcl 8.6.
+#
 # Canonical opcode reference: /usr/include/tcl8.6/tcl-private/generic/
 # tclCompile.h defines all 190 INST_* opcodes for stock Tcl 8.6.14
 # (`#define INST_DONE 0` ... `LAST_INST_OPCODE 189`). The mnemonic
 # names emitted by `tcl::unsupported::disassemble` come from
 # `tclInstructionTable[].name` in the matching tclCompile.c (NOT
 # shipped with `tcl8.6-dev`; available via `apt-get source tcl8.6` or
-# upstream tarball at core.tcl-lang.org). The STACK_EFFECTS table
-# below covers the bluice-empirical surface (~47 distinct opcodes)
-# plus ~13 safety-margin entries; opcodes outside this set hit the
-# §3.1.4 unknown_opcode boundary-recovery path (reset stack +
-# suppress until next startCommand). Cross-codebase coverage gaps
-# are surfaced empirically by `validation/probes/p1_2_corpus_recognition_probe.tcl
-# --root PATH` with frequency-ranked per-opcode breakdown.
+# upstream tarball at core.tcl-lang.org).
+#
+# Cross-codebase coverage gaps are surfaced empirically by
+# `validation/probes/p1_2_corpus_recognition_probe.tcl --root PATH` with
+# frequency-ranked per-opcode breakdown. Coverage tier breakdown is
+# reported by `validation/probes/opcode_coverage_probe.tcl`.
 #
 # Event types (post-v2.2 — every event carries src_start/src_end of its
 # anchored cmd):
@@ -45,7 +57,14 @@
 #   {kind uplevel_var     cmd N src_start S src_end E}
 #   {kind interp_eval     cmd N src_start S src_end E}
 #   {kind eval_brackets   cmd N src_start S src_end E}
+#   {kind computed_namespace cmd N src_start S src_end E}
 #   {kind unrecognized    cmd N src_start S src_end E reason ... terminal_op ... terminal_arg ... body_preview ...}
+#
+# Note: the `ensemble` kind is also emitted by the ensemble_fqn_rewrite
+# dispatch row when the bytecode compiler routes a stock ensemble through
+# invokeReplace — those events carry an extra `bytecode_form invokeReplace`
+# field for auditability but are otherwise identical in shape to
+# invokeStk-routed ensemble events.
 #
 # Stack slot shape:
 #   {kind LITERAL|VAR|EXPR|EXPAND_MARKER value STRING method STRING src_offset INT}
@@ -91,6 +110,18 @@ set ::jcm::disasm::walker::ENSEMBLES {
 # cover all of them. New opcodes from later Tcl versions land as one row.
 # ---------------------------------------------------------------------------
 
+# NOTE (P1.3 bundle 5 — `pushString` walker-orphan opcode):
+# `pushString` is the lone walker row that has no peer in the Tcl 8.6.14
+# `tclInstructionTable[]` (Tier 2). The
+# `validation/probes/opcode_coverage_probe.tcl` `Walker rows orphaned vs
+# Tcl table` count surfaces it explicitly. Empirical disasm output across
+# `/home/giles/bluice` (12,256 events) and `/usr/share/tcltk` (14,187
+# events) NEVER produces a `pushString` opcode — the row is defensive
+# cover for older Tcl variants / third-party builds that may emit a
+# string-form push opcode. Removing it would be safe today; leaving it in
+# costs one row and gives one less reason to revisit on a Tcl-9 upgrade.
+# Comment lives OUTSIDE the dict literal because Tcl's dict syntax
+# doesn't tolerate `#`-comments inside the braced body.
 set ::jcm::disasm::walker::STACK_EFFECTS {
     push1            {0 1 PUSH_LITERAL    int1}
     push4            {0 1 PUSH_LITERAL    int4}
@@ -153,6 +184,91 @@ set ::jcm::disasm::walker::STACK_EFFECTS {
     returnImm        {2 0 SPECIALIZED_OP  two-int}
     resolveCmd       {1 1 SPECIALIZED_OP  none}
     clockRead        {0 1 PUSH_LITERAL    int}
+    evalStk          {1 1 EVAL_STK        none}
+}
+
+# ---------------------------------------------------------------------------
+# Tier 2 — auto-loaded TCL_INSTRUCTION_TABLE (P1.3 Stream 3)
+# ---------------------------------------------------------------------------
+#
+# Source-of-truth fallback for opcodes that exist in stock Tcl 8.6 but
+# aren't hand-classified above. Loaded lazily by _ensure_tier2_loaded
+# the first time _lookup_effect misses on STACK_EFFECTS. The Tier 2 row
+# format is the auto-extractor's `{numBytes stackEffect numOperands
+# operand_types_csv}`; _lookup_effect maps it into the walker's normal
+# `{pop_count push_count effect_class operand_form}` shape using the
+# canonical signed stackEffect from tclInstructionTable[].
+#
+# Tier 2 hits emit NO dispatch event (the walker has authoritative
+# pop/push but no semantic shape — the opcode is bytecode-internal and
+# anchored to whatever cmd the next invokeStk fires for). They keep the
+# abstract stack sound across previously-unrecognized opcodes; the
+# §3.1.4 unknown_opcode boundary-recovery path now fires only for
+# Tier 3 (opcode in neither table).
+
+namespace eval ::jcm::disasm::tcltable {
+    # Don't clobber if a caller already sourced INSTRUCTION_TABLE_8_6_14.tcl
+    # before us (e.g., opcode_coverage_probe.tcl loads the table first to
+    # diff Tier 1 vs Tier 2). The lazy-load path in _ensure_tier2_loaded
+    # also populates this variable on first miss.
+    if {![info exists TCL_INSTRUCTION_TABLE]} {
+        variable TCL_INSTRUCTION_TABLE [dict create]
+    }
+}
+set ::jcm::disasm::walker::_TIER2_LOADED 0
+# P1.3 bundle (8) — Tier 2 lazy-load failure mode.
+#
+# Status enum (`_TIER2_STATUS`):
+#   unloaded  — initial state; first call attempts to source the table.
+#   loaded    — source $candidate succeeded; lookups consult the dict.
+#   missing   — table file absent on disk; permanent miss (single warn).
+#   failed    — source $candidate raised; permanent miss (single warn).
+#
+# Why a status enum: the prior code set `_TIER2_LOADED 1` BEFORE the
+# `source` so a corrupt / partial table left the loader stuck — Tier 3
+# boundary recovery ran for every opcode forever. The new state machine
+# keeps `_TIER2_LOADED 0` until the source actually succeeds, while the
+# `missing` / `failed` terminal states prevent infinite retry warnings.
+set ::jcm::disasm::walker::_TIER2_STATUS unloaded
+
+# Capture this file's directory AT SOURCE TIME — `[info script]` inside a
+# proc returns the *currently-being-sourced* file (often empty when the
+# proc is called from top-level tclsh), so deferring path resolution to
+# proc-call time silently broke Tier 2 lookup. Pinning the directory at
+# source time gives us a stable anchor regardless of how/when
+# _ensure_tier2_loaded is invoked.
+set ::jcm::disasm::walker::_WALKER_DIR [file dirname [file normalize [info script]]]
+
+proc ::jcm::disasm::walker::_ensure_tier2_loaded {} {
+    variable _TIER2_LOADED
+    variable _TIER2_STATUS
+    variable _WALKER_DIR
+    if {$_TIER2_LOADED} { return }
+    # Terminal-state guard: missing/failed states already emitted their
+    # warning. Don't retry on every miss (the bridge would print
+    # thousands of warnings on a long file).
+    if {$_TIER2_STATUS in {missing failed}} { return }
+    # Walk up from src/jcodemunch_mcp/parser/ to repo root, then descend
+    # into validation/probes/. _WALKER_DIR was captured at source time.
+    set repo_root [file normalize [file join $_WALKER_DIR .. .. ..]]
+    set candidate [file join $repo_root validation probes \
+        INSTRUCTION_TABLE_8_6_14.tcl]
+    if {![file exists $candidate]} {
+        set _TIER2_STATUS missing
+        puts stderr "WARN: Tier 2 instruction table not found at $candidate; falling through to Tier 3 boundary recovery for unrecognized opcodes."
+        return
+    }
+    if {[catch {source $candidate} err]} {
+        # Tier 2 unavailable; fall through to Tier 3 boundary recovery.
+        # Surface for diagnostics once and don't retry.
+        set _TIER2_STATUS failed
+        puts stderr "WARN: Tier 2 load failed for $candidate: $err"
+        return
+    }
+    # Source succeeded — only NOW mark as loaded so any future call
+    # short-circuits the file-system / source dance.
+    set _TIER2_LOADED 1
+    set _TIER2_STATUS loaded
 }
 
 # ---------------------------------------------------------------------------
@@ -193,17 +309,28 @@ proc ::jcm::disasm::walker::_simulate_stack {parsed} {
 
     set stack [list]
     set events [list]
-    # Dead-code / unknown-opcode suppression flag — set after unconditional
-    # jump1/jump4 (intentionally unreachable bytecode) OR after unknown_opcode
-    # (unknown stack effect → can't safely process subsequent ops). Cleared
-    # when pc enters a new cmd boundary (cmd_pc_starts).
-    # opcodes (whose fall-through is unreachable; subsequent insns belong
-    # to catch handlers reached only via exception-range entries). Cleared
-    # at the next startCommand boundary or any insn whose pc is the start
-    # of a new cmd. Without this, flat-pc walk through tcltls catch-handler
-    # pops corrupts the stack across loop bodies (empirical: 2 false
-    # underflows in tcltls tests). Per WALKER_CONTRACT_v2_2 §3.1.4 spirit
-    # ("drop slots until next startCommand boundary").
+    # Dead-code / unknown-opcode suppression flag.
+    #
+    # Triggers (set in_dead_code = 1):
+    #   1. Unconditional `jump1` / `jump4` — fall-through is unreachable;
+    #      subsequent instructions belong to catch handlers reached only
+    #      via exception-range entries, not via linear pc flow.
+    #   2. `unknown_opcode` — unknown stack effect, so any further opcode
+    #      processing could cascade-corrupt the abstract stack. The walker
+    #      also resets `stack` to empty when this trigger fires.
+    #
+    # Recovery (clear in_dead_code = 0): the next instruction whose pc
+    # equals a startCommand boundary (any pc in cmd_pc_starts). At that
+    # point a fresh command starts, the abstract stack model re-enters
+    # cleanly, and normal opcode processing resumes.
+    #
+    # Empirical justification: without this guard, the flat-pc walk through
+    # tcltls catch-handler pops corrupts the stack across loop bodies (2
+    # false stack-underflow `unrecognized` events in /usr/share/tcltk
+    # validation runs). Per WALKER_CONTRACT_v2_2 §3.1.4 ("drop slots until
+    # next startCommand boundary"), the contract permits this aggressive
+    # drop-until-boundary recovery as long as we re-enter the stack model
+    # at the next cmd start.
     set in_dead_code 0
     array set cmd_pc_starts {}
     foreach c $commands {
@@ -547,6 +674,67 @@ proc ::jcm::disasm::walker::_apply_stack_effect {stack_var op operand comment \
             # No stack effect. (startCommand resets nothing — Strategy A
             # accumulates across cmd boundaries by design.)
         }
+        EVAL_STK {
+            # evalStk pops the script value at TOS and evaluates it via
+            # Tcl_EvalObj at runtime (see tclCompile.c INST_EVAL_STK).
+            # Pop=1, push=1 (the result of the eval'd script). Emit a
+            # distinct eval_stk event — parallel to eval_var/eval_brackets
+            # — anchored to the cmd whose src range innermost-contains
+            # the popped slot's src_offset.
+            set len [llength $stack]
+            if {$len < 1} {
+                set ev [_emit_underflow $op $operand $src_offset \
+                    $src_ranges cmd_meta]
+                set stack [list]
+                lappend events $ev
+                return $events
+            }
+            set top [lindex $stack end]
+            set bottom_src [dict get $top src_offset]
+            set stack [lrange $stack 0 [expr {$len - 2}]]
+            # Anchor by popped slot's src_offset; innermost-wins.
+            set anchor [_lookup_src_range $bottom_src $src_ranges]
+            if {$anchor eq ""} {
+                set anchor [_lookup_src_range $src_offset $src_ranges]
+            }
+            if {$anchor eq ""} {
+                set ev [dict create kind unrecognized cmd -1 \
+                    src_start -1 src_end -1 reason "orphan_pc" \
+                    terminal_op $op terminal_arg $operand body_preview ""]
+                lappend stack [dict create kind EXPR value invoke_result \
+                    method "" src_offset $src_offset]
+                lappend events $ev
+                return $events
+            }
+            lassign $anchor cmd_idx anchor_start anchor_end
+            lappend events [dict create kind eval_stk cmd $cmd_idx \
+                src_start $anchor_start src_end $anchor_end]
+            lappend stack [dict create kind EXPR value invoke_result \
+                method "" src_offset $src_offset]
+        }
+        TIER2_AUTO {
+            # Auto-classified opcode from tclInstructionTable[]. We have
+            # canonical pop/push counts but no semantic dispatch shape.
+            # Apply the stack delta and push synthetic EXPR slots; do
+            # NOT emit any dispatch event.
+            set n_pop [_resolve_count $pop_spec $operand $operand_form]
+            set n_push [_resolve_count $push_spec $operand $operand_form]
+            set len [llength $stack]
+            if {$n_pop > $len} {
+                # Underflow on Tier 2 — drop slots silently. Bytecode-
+                # internal opcodes can underflow the abstract stack at
+                # cmd boundaries; the next startCommand is the recovery
+                # boundary. Same posture as SPECIALIZED_OP underflow.
+                set stack [list]
+            } elseif {$n_pop > 0} {
+                set keep [expr {$len - $n_pop}]
+                set stack [lrange $stack 0 [expr {$keep - 1}]]
+            }
+            for {set i 0} {$i < $n_push} {incr i} {
+                lappend stack [dict create kind EXPR value tier2_op \
+                    method "" src_offset $src_offset]
+            }
+        }
     }
     return $events
 }
@@ -736,21 +924,44 @@ proc ::jcm::disasm::walker::_dispatch_match {cmd_idx src_start src_end \
 }
 
 proc ::jcm::disasm::walker::_dispatch_table {} {
+    # Order matters: first-match wins. The two invokeReplace-routed rows
+    # must fire BEFORE namespace_eval / ensemble fallthrough so the more
+    # specific shapes anchor correctly:
+    #
+    #   * computed_namespace (P1.3 §13.6 Shape A) — `namespace eval $ns BODY`
+    #     where the namespace word is a VAR. Last slot is the literal
+    #     "::tcl::namespace::eval" but with a VAR somewhere in the
+    #     interior args, so namespace_eval would over-claim it as the
+    #     literal-namespace shape and lose the dynamic-ns signal. Catching
+    #     it earlier emits a `kind computed_namespace` event consumed by
+    #     unresolved_detector (same handler as eval_var / interp_eval).
+    #
+    #   * ensemble_fqn_rewrite (P1.3 §13.6 Shape B) — invokeReplace where
+    #     the last slot is a stock ensemble subcommand FQN
+    #     ("::tcl::clock::format", "::tcl::dict::for", etc.). The
+    #     bytecode compiler routes some ensembles through invokeReplace
+    #     when arity matches a known subcommand; the existing `ensemble`
+    #     row only matches invokeStk1/4, so without this row those calls
+    #     fall through to "no dispatch row matched". Emit `kind ensemble`
+    #     so the bridge driver's existing ensemble handler runs unchanged
+    #     (downstream parity with invokeStk-routed ensembles).
     return {
-        {namespace_eval _match_namespace_eval _emit_namespace_eval}
-        {expand_args    _match_expand_args    _emit_expand_args}
-        {callback       _match_callback       _emit_callback}
-        {apply_lambda   _match_apply_lambda   _emit_apply_lambda}
-        {ensemble       _match_ensemble       _emit_ensemble}
-        {eval_var       _match_eval_var       _emit_eval_var}
-        {eval_brackets  _match_eval_brackets  _emit_eval_brackets}
-        {uplevel_var    _match_uplevel_var    _emit_uplevel_var}
-        {interp_eval    _match_interp_eval    _emit_interp_eval}
-        {var_method     _match_var_method     _emit_var_method}
-        {var_command    _match_var_command    _emit_var_command}
-        {pattern_b      _match_pattern_b      _emit_pattern_b}
-        {pattern_a2     _match_pattern_a2     _emit_pattern_a2}
-        {pattern_a      _match_pattern_a      _emit_pattern_a}
+        {computed_namespace    _match_computed_namespace    _emit_computed_namespace}
+        {ensemble_fqn_rewrite  _match_ensemble_fqn_rewrite  _emit_ensemble_fqn_rewrite}
+        {namespace_eval        _match_namespace_eval        _emit_namespace_eval}
+        {expand_args           _match_expand_args           _emit_expand_args}
+        {callback              _match_callback              _emit_callback}
+        {apply_lambda          _match_apply_lambda          _emit_apply_lambda}
+        {ensemble              _match_ensemble              _emit_ensemble}
+        {eval_var              _match_eval_var              _emit_eval_var}
+        {eval_brackets         _match_eval_brackets         _emit_eval_brackets}
+        {uplevel_var           _match_uplevel_var           _emit_uplevel_var}
+        {interp_eval           _match_interp_eval           _emit_interp_eval}
+        {var_method            _match_var_method            _emit_var_method}
+        {var_command           _match_var_command           _emit_var_command}
+        {pattern_b             _match_pattern_b             _emit_pattern_b}
+        {pattern_a2            _match_pattern_a2            _emit_pattern_a2}
+        {pattern_a             _match_pattern_a             _emit_pattern_a}
     }
 }
 
@@ -758,6 +969,107 @@ proc ::jcm::disasm::walker::_dispatch_table {} {
 # Predicates and emitters — preserved verbatim from P1.1 with minor
 # signature changes (they receive cmd_idx + src_start + src_end).
 # ---------------------------------------------------------------------------
+
+# --- computed_namespace (P1.3 §13.6 Shape A) ---
+# `namespace eval $ns BODY` — the bytecode compiler emits the SAME
+# invokeReplace shape as a literal `namespace eval ::foo BODY` (last
+# slot LITERAL "::tcl::namespace::eval"), but with a VAR somewhere in
+# the interior arg slots (typically slot[2] for the standard form).
+# Without this row, the namespace_eval row over-claims it and the
+# bridge driver loses the signal that the ns target is dynamic.
+#
+# Predicate: op==invokeReplace AND last slot LITERAL==::tcl::namespace::eval
+# AND at least one interior slot is VAR.
+#
+# Empirical examples from /usr/share/tcltk/tcllib1.21:
+#   * namespace eval $name { ... }           — many places
+#   * namespace eval ::dns::$dns::token { ... } — dns/dns.tcl
+#   * namespace eval ::oo::Helpers::$ns { ... } — oo/build.tcl
+#
+# The event `kind computed_namespace` is already an unresolved-family
+# event handled by the bridge driver at _dispatch_event line ~485
+# (eval_var - eval_brackets - var_method - uplevel_var - interp_eval -
+# var_command - computed_namespace) — same treatment as other dynamic
+# dispatches.
+proc ::jcm::disasm::walker::_match_computed_namespace {slots op arg} {
+    if {$op ne "invokeReplace"} { return 0 }
+    set last [lindex $slots end]
+    if {$last eq ""} { return 0 }
+    if {[dict get $last kind] ne "LITERAL"} { return 0 }
+    if {[dict get $last value] ne "::tcl::namespace::eval"} { return 0 }
+    # At least one interior slot must be VAR (otherwise the literal
+    # namespace_eval row should handle it).
+    set n [llength $slots]
+    if {$n < 2} { return 0 }
+    for {set i 0} {$i < [expr {$n - 1}]} {incr i} {
+        set s [lindex $slots $i]
+        if {[dict get $s kind] eq "VAR"} { return 1 }
+    }
+    return 0
+}
+proc ::jcm::disasm::walker::_emit_computed_namespace {cmd_idx s e slots op arg} {
+    return [dict create kind computed_namespace cmd $cmd_idx \
+        src_start $s src_end $e]
+}
+
+# --- ensemble_fqn_rewrite (P1.3 §13.6 Shape B) ---
+# Stock ensemble subcommands routed via invokeReplace. The bytecode
+# compiler picks invokeReplace over invokeStk for some ensembles when
+# arity is a known subcommand of a built-in ensemble — concretely,
+# `clock format $x` compiles to `push "::tcl::clock::format"` +
+# `invokeReplace 3 2`, while `clock format` (no arg) goes through the
+# existing invokeStk1 ensemble path.
+#
+# Predicate: op==invokeReplace AND last slot LITERAL matches
+# ^::tcl::ENS::SUB$ where ENS is one of the 10 stock ensembles (post-R32
+# ensemble pre-rename table; matches `ENSEMBLE_VERDICT.md` and SPEC_v2
+# §3.3) AND the literal is NOT exactly "::tcl::namespace::eval" — the
+# namespace_eval and computed_namespace rows own that shape. We can't
+# rely on first-match-wins ordering alone here because the namespace_eval
+# row's predicate is *more general* than this one (it matches any
+# invokeReplace ending in ::tcl::namespace::eval, with no interior-slot
+# requirement) — so this row would over-claim literal-namespace shapes
+# if not explicitly excluded.
+#
+# Empirical examples from /usr/share/tcltk/tcllib1.21:
+#   * clock format $x                       — clock/rfc2822.tcl:211,213
+#   * dict for {k v} $d { ... }            — many tcllib modules
+#   * dict update $d k1 v1 ...             — dict-heavy code paths
+#
+# Event payload uses `kind ensemble` (NOT a new kind) so the bridge
+# driver's existing ensemble handler runs unchanged — downstream
+# semantics are identical to invokeStk-routed ensembles (emits an
+# "ensemble subcommand" call edge).
+proc ::jcm::disasm::walker::_match_ensemble_fqn_rewrite {slots op arg} {
+    if {$op ne "invokeReplace"} { return 0 }
+    set last [lindex $slots end]
+    if {$last eq ""} { return 0 }
+    if {[dict get $last kind] ne "LITERAL"} { return 0 }
+    set v [dict get $last value]
+    # Exclude ::tcl::namespace::eval — owned by namespace_eval /
+    # computed_namespace rows.
+    if {$v eq "::tcl::namespace::eval"} { return 0 }
+    # P1.3 bundle (9): regex aligned to the existing `ensemble` row's
+    # `^::tcl::([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)$` shape so both rows
+    # accept the same vocabulary (stock Tcl 8.6 ensemble subcommand
+    # naming). `[a-zA-Z0-9_]+` (vs the prior `[a-zA-Z_][a-zA-Z0-9_]*`)
+    # tolerates a leading-digit subcommand if a future Tcl variant or
+    # third-party ensemble produces one — vanishingly unlikely in
+    # stock 8.6 but free at this regex level.
+    if {![regexp {^::tcl::([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)$} \
+            $v -> ens sub]} { return 0 }
+    expr {$ens in $::jcm::disasm::walker::ENSEMBLES}
+}
+proc ::jcm::disasm::walker::_emit_ensemble_fqn_rewrite {cmd_idx s e slots op arg} {
+    set v [_slot_value [lindex $slots end]]
+    regexp {^::tcl::([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)$} \
+        $v -> ens sub
+    set N [_slot_count_for_op $op $arg]
+    return [dict create kind ensemble cmd $cmd_idx \
+        src_start $s src_end $e \
+        ensemble $ens subcommand $sub arg_count $N \
+        bytecode_form invokeReplace]
+}
 
 # --- namespace_eval (R9) ---
 proc ::jcm::disasm::walker::_match_namespace_eval {slots op arg} {
@@ -1008,7 +1320,97 @@ proc ::jcm::disasm::walker::_lookup_effect {op} {
     if {[dict exists $STACK_EFFECTS $op]} {
         return [dict get $STACK_EFFECTS $op]
     }
+    # Tier 2: consult the canonical tclInstructionTable[] extract.
+    # Returns a synthesized {pop push TIER2_AUTO operand_form} effect
+    # using authoritative pop/push counts from the Tcl compiler. NO
+    # dispatch event is emitted for TIER2_AUTO — the walker just keeps
+    # its abstract stack sound across previously-unrecognized opcodes.
+    _ensure_tier2_loaded
+    if {[dict exists $::jcm::disasm::tcltable::TCL_INSTRUCTION_TABLE $op]} {
+        set row [dict get $::jcm::disasm::tcltable::TCL_INSTRUCTION_TABLE $op]
+        lassign $row numbytes stackeff numoperands optypes_csv
+        return [_tier2_synthesize $op $numbytes $stackeff $numoperands \
+            $optypes_csv]
+    }
     return ""
+}
+
+# Synthesize a Tier-1-shaped stack-effect tuple from the canonical
+# tclInstructionTable[] row. Returns {pop_count push_count effect_class
+# operand_form}.
+#
+# stackEffect is signed (push - pop). For numeric stackEffect the canonical
+# semantics from tclCompile.c is: pop = max(0, -stackEffect + (push-only
+# delta)); but at the level of "keep the abstract stack consistent" we
+# only need (pop, push) such that push - pop == stackEffect. The walker's
+# downstream consumers (_apply_stack_effect TIER2_AUTO branch) treat
+# every Tier 2 push as an opaque EXPR slot, so we pick the simplest
+# decomposition: if stackEffect >= 0, pop = numOperands... no — that
+# conflates stack with operand bytes. Use this rule instead:
+#   * stackEffect == INT_MIN  → operand-driven (pop_count="N", read from
+#     operand per operand_form). Map operand_types to operand_form.
+#   * stackEffect >= 0        → pop = 0, push = stackEffect.
+#   * stackEffect <  0        → pop = -stackEffect, push = 0. (Most
+#     binary ops in tclInstructionTable have stackEffect=-1 i.e. pop 2,
+#     push 1; see comments in §3.2 of WALKER_CONTRACT_v2_2.) For walker
+#     purposes the EXPR push is restored synthetically — the abstract
+#     stack tracks only kind, not arity-equivalence.
+#
+# This loses the exact pop=2/push=1 distinction for binary ops (we
+# emit pop=1/push=0 instead, then push back a synthetic EXPR), but the
+# net effect on the stack height matches and dispatch doesn't fire on
+# Tier 2 anyway. Strictly: Tier 2's contract is "delta-correct" not
+# "shape-correct".
+proc ::jcm::disasm::walker::_tier2_synthesize {op numbytes stackeff \
+        numoperands optypes_csv} {
+    set operand_form [_tier2_operand_form $optypes_csv]
+    if {$stackeff eq "INT_MIN"} {
+        # Operand-driven; pop_count = N from operand. invokeStk1/4 etc.
+        # already have hand-classified Tier 1 rows, so reaching this path
+        # means a less-common variadic op (e.g., callFunc1, lsetFlat).
+        return [list N 1 TIER2_AUTO $operand_form]
+    }
+    if {![string is integer -strict $stackeff]} {
+        # Defensive — extractor only emits signed ints or INT_MIN.
+        return ""
+    }
+    if {$stackeff >= 0} {
+        return [list 0 $stackeff TIER2_AUTO $operand_form]
+    }
+    set pop [expr {-$stackeff}]
+    return [list $pop 0 TIER2_AUTO $operand_form]
+}
+
+# Map the comma-joined operand_types string from the extractor to the
+# walker's operand_form vocabulary. Conservative: when in doubt, use
+# "none" (operand_form is only consulted by _resolve_count for "N"
+# pop_specs, and Tier 2 emits "N" pop_spec only for INT_MIN cases).
+proc ::jcm::disasm::walker::_tier2_operand_form {optypes_csv} {
+    set parts [split $optypes_csv ","]
+    set first [lindex $parts 0]
+    set count [llength $parts]
+    if {$count >= 2} {
+        # Two-operand ops (typically OPERAND_UINT4 + OPERAND_UINT1 for
+        # invokeReplace, OPERAND_LVT4 + OPERAND_AUX4 for dictUpdate*).
+        return two-int
+    }
+    switch -- $first {
+        OPERAND_LIT1 -
+        OPERAND_LVT1 -
+        OPERAND_INT1 -
+        OPERAND_UINT1 -
+        OPERAND_OFFSET1 { return int1 }
+        OPERAND_LIT4 -
+        OPERAND_LVT4 -
+        OPERAND_INT4 -
+        OPERAND_UINT4 -
+        OPERAND_OFFSET4 -
+        OPERAND_AUX4 -
+        OPERAND_IDX4 { return int4 }
+        OPERAND_NONE -
+        ""           { return none }
+        default      { return int }
+    }
 }
 
 proc ::jcm::disasm::walker::_decode_operand_int {operand} {

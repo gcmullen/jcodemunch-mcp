@@ -1,0 +1,17 @@
+# P1.3 bundle (0): computed_namespace BODY recursion (data-loss regression)
+#
+# Locks the walker event shape for `namespace eval $var BODY` containing a
+# nested literal proc. The bridge driver's _dispatch_event now follows this
+# event with body recursion (kind=computed_namespace branch) so the inner
+# proc is no longer silently dropped. This fixture validates that the walker
+# emits the computed_namespace event the bridge driver depends on; the
+# end-to-end recursion verdict lives in the pytest suite
+# (TestComputedNamespaceBodyRecursion).
+namespace eval ::Outer {
+    proc literal_proc {} { puts hello }
+    set ns_dyn ::Dynamic
+    namespace eval $ns_dyn { proc dropped_proc {} { puts world } }
+}
+
+---
+  namespace_eval    cmd=1 src_start=548 src_end=705 ns=::Outer body=\n    proc literal_proc {} { puts hello ...
