@@ -1,0 +1,1066 @@
+{
+  "summary": {
+    "total_verdicts": 166,
+    "null_line_verdicts": 35,
+    "category_tally": {
+      "a_missing_callee_entirely": 35
+    },
+    "verdict_tally_for_null_line": {
+      "A_correct": 18,
+      "B_correct": 14,
+      "convention_ambiguous": 3
+    }
+  },
+  "classified": [
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::constructor",
+      "callee_name": "::mediator",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "qualified",
+          "note": "::mediator announceExistence"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::constructor",
+          "kind": "constructor",
+          "name": "::mediator",
+          "callee_kind": "qualified",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::constructor",
+      "callee_name": "create${tt}Tab",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.14",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "unresolved",
+          "note": "dynamic command name composed from variable tt"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::constructor",
+          "kind": "constructor",
+          "name": "create${tt}Tab",
+          "callee_kind": "unresolved",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::constructor",
+      "callee_name": "getStr",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getStr bluice.videoTabList"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getStr bluice.beamMatchColor"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::constructor",
+          "kind": "constructor",
+          "name": "getStr",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::constructor",
+          "kind": "constructor",
+          "name": "getStr",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::constructor",
+      "callee_name": "getStr",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getStr bluice.videoTabList"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getStr bluice.beamMatchColor"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::constructor",
+          "kind": "constructor",
+          "name": "getStr",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::constructor",
+          "kind": "constructor",
+          "name": "getStr",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+      "callee_name": "?",
+      "verdict": "convention_ambiguous",
+      "rule_basis": "\u00a75.14",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "unresolved",
+          "note": "$className widget creation \u2014 variable command"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+          "kind": "method",
+          "name": "?",
+          "callee_kind": "unresolved",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 5"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 5"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+      "callee_name": "ComboSamplePositioningWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "ComboSamplePositioningWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+          "kind": "method",
+          "name": "ComboSamplePositioningWidget",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+      "callee_name": "getStr",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getStr bluice.lightClass"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_INLINE_ONLYTab",
+          "kind": "method",
+          "name": "getStr",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+      "callee_name": "?",
+      "verdict": "convention_ambiguous",
+      "rule_basis": "\u00a75.14",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "unresolved",
+          "note": "$className widget creation \u2014 variable command"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+          "kind": "method",
+          "name": "?",
+          "callee_kind": "unresolved",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1 (sample)"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1 (inline)"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1 (sample)"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1 (inline)"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+      "callee_name": "ComboSamplePositioningWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "ComboSamplePositioningWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+          "kind": "method",
+          "name": "ComboSamplePositioningWidget",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+      "callee_name": "getStr",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getStr bluice.lightClass"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_IR_ONLYTab",
+          "kind": "method",
+          "name": "getStr",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+      "callee_name": "?",
+      "verdict": "convention_ambiguous",
+      "rule_basis": "\u00a75.14",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "unresolved",
+          "note": "$className widget creation \u2014 variable command"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+          "kind": "method",
+          "name": "?",
+          "callee_kind": "unresolved",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 5"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 5"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+      "callee_name": "ComboSamplePositioningWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "ComboSamplePositioningWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+          "kind": "method",
+          "name": "ComboSamplePositioningWidget",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+      "callee_name": "getStr",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getStr bluice.lightClass"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createCOMBO_SAMPLE_ONLYTab",
+          "kind": "method",
+          "name": "getStr",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createComboTab",
+      "callee_name": "ComboLightControlWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "ComboLightControlWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createComboTab",
+          "kind": "method",
+          "name": "ComboLightControlWidget",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createComboTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 5"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createComboTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createComboTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createComboTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1"
+        },
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 5"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createComboTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        },
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createComboTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createComboTab",
+      "callee_name": "ComboSamplePositioningWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "ComboSamplePositioningWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createComboTab",
+          "kind": "method",
+          "name": "ComboSamplePositioningWidget",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createDiffractionTab",
+      "callee_name": "getImgsrvHttpPort",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImgsrvHttpPort"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createDiffractionTab",
+          "kind": "method",
+          "name": "getImgsrvHttpPort",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createDiffractionTab",
+      "callee_name": "getImgsrvHost",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImgsrvHost"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createDiffractionTab",
+          "kind": "method",
+          "name": "getImgsrvHost",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createDiffractionTab",
+      "callee_name": "DiffImageViewer",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "DiffImageViewer creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createDiffractionTab",
+          "kind": "method",
+          "name": "DiffImageViewer",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createEmissionTab",
+      "callee_name": "VisexUserView",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "VisexUserView creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createEmissionTab",
+          "kind": "method",
+          "name": "VisexUserView",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createHutchTab",
+      "callee_name": "DCS::PresetVideoWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "qualified",
+          "note": "DCS::PresetVideoWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createHutchTab",
+          "kind": "method",
+          "name": "DCS::PresetVideoWidget",
+          "callee_kind": "qualified",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createPanelTab",
+      "callee_name": "DCS::PresetVideoWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "qualified",
+          "note": "DCS::PresetVideoWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createPanelTab",
+          "kind": "method",
+          "name": "DCS::PresetVideoWidget",
+          "callee_kind": "qualified",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createRobotTab",
+      "callee_name": "DCS::PresetVideoWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "qualified",
+          "note": "DCS::PresetVideoWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createRobotTab",
+          "kind": "method",
+          "name": "DCS::PresetVideoWidget",
+          "callee_kind": "qualified",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createSampleTab",
+      "callee_name": "getImageUrl",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::config getImageUrl 1"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createSampleTab",
+          "kind": "method",
+          "name": "getImageUrl",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createSampleTab",
+      "callee_name": "SamplePositioningWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "SamplePositioningWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createSampleTab",
+          "kind": "method",
+          "name": "SamplePositioningWidget",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "DCS::BeamlineVideoNotebook::createSampleTab",
+      "callee_name": "LightControlWidget",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a75.1",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "static",
+          "note": "LightControlWidget creation"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "DCS::BeamlineVideoNotebook::createSampleTab",
+          "kind": "method",
+          "name": "LightControlWidget",
+          "callee_kind": "static",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "startBeamlineVideoNotebook",
+      "callee_name": "configure",
+      "verdict": "A_correct",
+      "rule_basis": "\u00a75.2",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "method_dispatch",
+          "note": "::dcss configure"
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "startBeamlineVideoNotebook",
+          "kind": "proc",
+          "name": "configure",
+          "callee_kind": "method_dispatch",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    },
+    {
+      "symbol": "startBeamlineVideoNotebook",
+      "callee_name": "getLogin",
+      "verdict": "B_correct",
+      "rule_basis": "\u00a76.12",
+      "category": "a_missing_callee_entirely",
+      "a_hits": [],
+      "b_hits": [
+        {
+          "side": "B",
+          "line": null,
+          "kind": "callback",
+          "note": "-forcedLoginCallback \".activeButton getLogin\""
+        }
+      ],
+      "disc_hits": [
+        {
+          "qualified_name": "startBeamlineVideoNotebook",
+          "kind": "proc",
+          "name": "getLogin",
+          "callee_kind": "callback",
+          "line": null,
+          "source": "B_only"
+        }
+      ]
+    }
+  ]
+}

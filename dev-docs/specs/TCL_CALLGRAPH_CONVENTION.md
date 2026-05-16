@@ -1,8 +1,11 @@
 # TCL / iTcl / Tk / iTk Call-Graph Convention
 
 **Status:** DRAFT
-**Version:** 1.0
-**Date:** 2026-05-15
+**Version:** 1.3
+**Date:** 2026-05-16
+**Changelog from v1.2:** §4.1 add `args` (list-of-strings) and `arity` (int) to symbol object for callable kinds; §4.2 / §5.3 add `receiver_hint` to method_dispatch callees; §7.1 Tier 1 add `lmap`, `time`; §7.1 Tier 2 add `flush`, `seek`, `tell`, `concat`, `eof`, `global`, `variable` (the last two formalize Phase 2 arbiter verdicts on Clock/DEG_HORZ); §7.1 Tier 2 body-walk exceptions extended to `dict with`, `dict map`, `dict filter` (script form); §7.1 Tier 3 add `open`, `close`, `update`, `vwait`; §7.1 Tier 4 add `oo::define`, `oo::objdefine`, `interp create`; §7.1 Tier 5 add `auto_load`, `auto_import`, `tm path add`; §5.10 / §7.5 add `image create TYPE` as a documented 3-word ensemble phrase (P3.1 — formalizes 5 Scan3DView Phase-2 `convention_ambiguous` verdicts); §5.8.2 extends D3 with `eval $cb args` recognition as `callback_var` (P3.1 — formalizes 1 AsyncGets ambiguity); §5.10 adds qualified-name-vs-ensemble precedence rule (`::dcss configure` is 1-word qualified, not 2-word ensemble) and §7.2 / §5.14 add `${var}`-in-callee-name handling rule (must emit `name: "?"`, not the interpolated literal) — both P3.1-canary follow-ups closing the 2 new ambiguous verdicts surfaced when BeamlineVideo was re-run under v1.3. §7.1 Tier 2 adds `list` (the value-constructor, sibling of `concat`/`lappend` — P3.1-canary-2 Clock.tcl follow-up). §5.4.2 clarifies that DSL-implementation files (e.g. files defining `proc class {...}`) are annotated as ordinary procedural Tcl, not as §5.4.2 class definers — P3.1-canary-2 git-gui/class.tcl follow-up. All v1.3 changes require re-annotation to populate (new schema fields) or to apply new filters (Tier changes). The remaining Phase 2 ambiguities (§5.14 null-line × 3, §5.1 dispute-record × 4) were tooling-side and resolved by T6 (forcing-example prompt) + T8 (honest dispute classifier) earlier in P3.0.
+**Changelog from v1.1:** §4 add `schema_version` top-level field; §4.3 add `computed_source` subkind (split from `computed_namespace`); §5.4.2 add by-analogy qualifier; §5.7 / §5.14 retarget dynamic-source-path to `computed_source`; §5.10 fix broken `itcldelete.html` citation + normalize ensemble list with §7.1/§7.5 (add `binary`, `encoding`); §6.3 add by-analogy note for brace-literal COMMAND; §6.9 explicit Layer B tag on "dispatcher is NOT a callee"; §6.11 add `-cgetmethodvar` / `-configuremethodvar` / `-validatemethodvar` callback_var variants; §7.7 reframed as parser prerequisite (no longer a Layer B rule); §4.2 `note` field policy clarified.
+**Changelog from v1.0:** §5.1 self-method clarification; §5.3 method-word literal + variable-receiver requirement; §5.8.1 Tier-filter composition with D1; §6.12 value-shape-driven callback recognition; §7.1 Tier-2 ensemble list harmonized with §7.5.
 **Audience:** LLM annotators producing JSON call-graph annotations for Tcl source files; humans authoring test fixtures.
 
 ---
@@ -31,7 +34,8 @@ An annotation for a single source file is a JSON object with this shape. All fie
 
 ```json
 {
-  "file": "<path-or-identifier>",
+  "schema_version": "1.2",
+  "file": "<basename>",
   "language": "tcl" | "itcl" | "tk" | "itk",
   "symbols": [ <symbol>, ... ],
   "file_level": {
@@ -42,6 +46,17 @@ An annotation for a single source file is a JSON object with this shape. All fie
   }
 }
 ```
+
+**`schema_version`** is the convention version this annotation was produced under (e.g. `"1.3"`). Consumers MUST check this field and reject or migrate annotations produced under an older incompatible version. Older annotations (pre-v1.2) lack this field; readers may treat missing `schema_version` as `"1.1"` for backward compatibility.
+
+**`file`** is the source file's basename (e.g. `"AutoSample.tcl"`), not an absolute or relative path. Path-form values are rejected to avoid leaking corpus-origin info into the annotation surface.
+
+**Field-shape requirements (strict):**
+- `language` is one of `"tcl"`, `"itcl"`, `"tk"`, `"itk"` and is determined purely by the source file's **extension** (case-insensitive): `.tcl→tcl`, `.itcl→itcl`, `.tk→tk`, `.itk→itk`. Content does not override the extension — an `.tcl` file using `itcl::class` is still `"tcl"`. This is the author's declared intent; downstream consumers can detect actual dialect from content if needed. The orchestrator lower-cases before storing. Multi-flavor synonyms like `"Tcl/iTcl"` are NOT accepted.
+- `package_requires` is an array of **bare strings** — just the package name, e.g. `["Itcl", "DependencyInjector"]`. Never `[{name, version}]` objects. Version requirements, if needed by the source, are recorded only inside `package_provides`.
+- `imports` is an array of **bare strings** — verbatim source paths from `source PATH`. Never objects.
+- `package_provides` is the only field that uses `[{name, version}, ...]` objects (`version` may be `null`).
+- File-level `package_requires` / `package_provides` / `imports` apply when the declaration is lexically at top level. Inside a symbol body, those fields go on the symbol — but they MUST NOT be duplicated from `file_level` onto enclosing class/namespace symbols. A class symbol whose body contains no `package require` lines has `package_requires: []`, even if the file itself has top-level `package require` calls above the class.
 
 ### 4.1 Symbol object
 
@@ -54,6 +69,8 @@ An annotation for a single source file is a JSON object with this shape. All fie
         | "class" | "namespace" | "coroutine" | "configbody" | "lambda",
   "visibility": "public" | "private" | "protected" | null,
   "parent_classes": ["<class-name>", ...],
+  "args": ["<arg-name>", ...],
+  "arity": <int>,
   "package_requires": ["<pkg-name>", ...],
   "package_provides": [{"name": "<pkg-name>", "version": "<version-or-null>"}, ...],
   "imports": ["<source-path>", ...],
@@ -67,6 +84,7 @@ Field applicability by kind:
 - `qualified_name`, `line`, `end_line`, `kind` — required on every symbol.
 - `visibility` — populated for `method`, `class_method`, `constructor`, `destructor`, `configbody`. `null` for all other kinds.
 - `parent_classes` — populated only for `class`. `[]` otherwise.
+- `args` / `arity` — populated for `proc`, `method`, `class_method`, `constructor`, `lambda` (anything that takes a positional argument list at the declaration site). `args` is the verbatim ordered list of formal-parameter names from the source — without any default-value brackets (`{name default}` → `"name"`). `arity` is `len(args)`. For variadic procs whose final parameter is `args`, `arity` is the count INCLUDING the `args` parameter (e.g. `proc foo {a b args}` → `args: ["a", "b", "args"], arity: 3`); consumers detect variadic by `args[-1] == "args"`. `args: [], arity: 0` for `class`, `namespace`, `destructor`, `coroutine`, `configbody` (which take no positional list at declaration).
 - `callees`, `unresolved_dispatches` — `[]` for `class` and `namespace` symbols (containers); populated for the other kinds.
 - `package_requires`, `package_provides`, `imports` — populated only when those declarations occur lexically inside the symbol's body. Top-level declarations populate the `file_level` block instead.
 - All array fields obey §7.3: always an array, possibly empty, never `null` and never absent.
@@ -79,9 +97,14 @@ Field applicability by kind:
   "line": <int, 1-indexed line of the call site>,
   "kind": "static" | "ensemble" | "callback" | "qualified" | "method_dispatch"
         | "lambda" | "unresolved",
+  "receiver_hint": "<optional-string, see below>",
   "note": "<optional-string, human-readable detail>"
 }
 ```
+
+**`receiver_hint` policy:** populated ONLY when `kind == "method_dispatch"`. Carries the verbatim source-form of the receiver expression: `"$obj"`, `"${obj}"`, `"$itk_component(eu)"`, `"$itk_component(notebook)"`, etc. This is the literal receiver word from the source command, copied verbatim (no normalization, no `${}` stripping). Lets refactor and blast-radius tools cluster `method_dispatch` calls by receiver variable without parsing the freeform `note`. Absent or empty on all other `kind` values.
+
+**`note` policy:** the `note` field is optional and human-readable. Several sections (§5.3, §6.9, §6.12, §7.2) recommend a specific note shape for particular call patterns (e.g. `"$obj <method>"` for method_dispatch). Downstream tools MAY rely on the recommended shapes when present, but the field is not a closed enum — annotators MAY omit it or use the freeform form. A missing `note` is equivalent to an empty string; tools MUST tolerate either.
 
 - `static` — first word is a literal command identifier (Pattern A).
 - `qualified` — first word is a literal `::`-separated multi-segment name.
@@ -100,7 +123,7 @@ For unresolved call sites the annotator MAY also list a richer record in `unreso
   "line": <int>,
   "subkind": "var_command" | "var_method" | "callback_var"
            | "eval_var" | "eval_brackets" | "interp_eval"
-           | "computed_namespace" | "computed_lambda",
+           | "computed_namespace" | "computed_source" | "computed_lambda",
   "raw": "<verbatim source fragment>",
   "hints": ["<receiver-or-method-name-if-partially-known>", ...]
 }
@@ -123,20 +146,23 @@ A word that, after backslash and (where applicable) variable/command substitutio
 
 If the literal contains namespace separators (`::`), see §5.2.
 
+Bare literal first words inside an iTcl/iTk/TclOO method body are recorded as `static` per this rule even when they semantically resolve to a self-method call on `$this`. The convention does not distinguish implicit self-dispatch from a global proc call; downstream consumers that need self-method resolution can perform class-method lookup using the enclosing symbol's class.
+
 ### 5.2 Qualified call — Pattern A2: `Ns::foo`, `::Ns::foo`, `Ns::Sub::foo`
 
 Command names containing `::` resolve hierarchically (namespace(n) §RESOLUTION; [namespace.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/namespace.htm)). A leading `::` is absolute; otherwise the resolver searches the current namespace, the command path, then the global namespace.
 
 - Annotation: `{name: "<verbatim-qualified-name>", kind: "qualified"}`.
-- Preserve every segment of the qualified name verbatim. Do not strip the leading `::` if present; do not normalize.
+- Preserve every segment of the qualified name verbatim. Do not strip the leading `::` if present; do not normalize. Concrete examples: source `::mediator register $this` → `{name: "::mediator register", kind: "qualified"}` (NOT `register`); source `::DCS::ComponentGate #auto ...` → `{name: "::DCS::ComponentGate", kind: "qualified"}` (NOT `DCS::ComponentGate`); source `DCS::Component::sendUpdate $name` → `{name: "DCS::Component::sendUpdate", kind: "qualified"}` (NOT `sendUpdate`). The stripped form is a recurring annotator error and is always wrong.
 - Static analyzers cannot reliably reconstruct the current namespace at every call site without simulating `namespace eval` nesting, so the convention preserves the source-form name and lets downstream consumers handle resolution.
 
 ### 5.3 Object dispatch — Pattern B: `$obj method arg1 arg2 ...`
 
 When the first word is a variable substitution `$obj` (or `${obj}`) that yields an object command, the second word is the method name (Tcl(n) rule [8]; itcl::class object-method dispatch; [class.html](https://www.tcl-lang.org/man/tcl/ItclCmd/class.html)). The receiver `$obj` is statically unresolvable in the general case; the method name is the searchable key.
 
-- Annotation: `{name: "method", kind: "method_dispatch", note: "$obj <method>"}`.
-- The `name` field is the literal method word.
+- Annotation: `{name: "<method>", kind: "method_dispatch", receiver_hint: "<receiver-source-form>", note: "$obj <method>"}` where `<method>` is the LITERAL second-word identifier from the source command (e.g., for `$clock addListener $this`, name = `"addListener"`) and `receiver_hint` is the verbatim source-form of the receiver expression (e.g. `"$clock"`, `"${obj}"`, `"$itk_component(eu)"`). Do NOT emit the placeholder string `"method"` — always substitute the actual method word. The `receiver_hint` is required on method_dispatch callees per §4.2.
+- This rule fires only when the first word is a variable substitution (`$obj`, `${obj}`). A literal qualified name in command position (e.g., `::config getStr foo`) is NOT method dispatch — it is a §5.2 qualified call where `::config` is the callee and `getStr foo` are data arguments.
+- The rule ALSO fires when the variable-substituted receiver is itself a bracketed expression whose first inner term is `$var` — e.g., `[$itk_component(eu) childsite]` → `{name: "childsite", kind: "method_dispatch", note: "$itk_component(...) childsite"}`. Such bracketed-receiver forms are still method_dispatch, not §5.11 bracket substitution. Failing to record them is a recurring annotator error.
 - If the method-position word is itself a variable substitution (`$obj $m`), the call site is fully dynamic; emit `{name: "?", kind: "unresolved", note: "var_method on $obj"}` and add an `unresolved_dispatches` entry with `subkind: "var_method"` (§5.14).
 
 ### 5.4 Class and namespace declarations
@@ -151,9 +177,17 @@ Declares an [incr Tcl] class ([class.html](https://www.tcl-lang.org/man/tcl/Itcl
 
 #### 5.4.2 Custom `class NAME { BODY }` DSL (D9)
 
-A bare `class NAME BODY` form, common in vendor DSLs that alias `itcl::class` (for example the bluice/dcss ecosystem), is treated identically to `itcl::class NAME BODY` at the static level. Rationale follows from D9: the DSL is documented in those ecosystems as a 1:1 alias for `itcl::class`, so the same body grammar and semantics apply (see [class.html](https://www.tcl-lang.org/man/tcl/ItclCmd/class.html)).
+A bare `class NAME BODY` form, common in vendor DSLs that alias `itcl::class` (for example the bluice/dcss ecosystem), is treated identically to `itcl::class NAME BODY` at the static level. **This rule is Layer A by analogy** — it inherits the BODY semantics of §5.4.1 conditional on the ecosystem providing the alias (via `interp alias`, `rename`, or an equivalent). The Tcl/iTcl language spec does NOT define a bare `class` command at the language level; the BODY grammar is borrowed wholesale from `itcl::class` as documented at [class.html](https://www.tcl-lang.org/man/tcl/ItclCmd/class.html).
 
 - Annotation: identical to §5.4.1.
+
+**DSL-implementation files (v1.3 P3.1-canary-2 follow-up).** A file that *implements* the custom `class NAME BODY` DSL (e.g. git-gui's `lib/class.tcl`, which defines `proc class {name body} { ... }`) is **not** itself a class-definition file. The annotator MUST treat such a file as ordinary procedural Tcl:
+
+- Annotate the `proc class { ... }` itself as a regular §6.2 proc symbol.
+- Do NOT synthesize §5.4.2 class symbols from any `class NAME BODY` literal that appears inside the proc body (e.g. inside an `if` branch handling argument variants). Those are data being passed to the implementing proc, not class declarations.
+- Inner `method`, `proc`, etc. calls inside the implementing proc's body are ordinary §5.1 / §5.5 calls (they reference helper procs in the implementing module, not class-body directives).
+
+This distinction matters because §5.4.2's "treat as itcl::class" rule applies to *invocations* of the alias (`class FooBar { method m {} {...} }` as a top-level form), not to its *implementation* (`proc class { name body } { ... }`). DSL users and DSL implementers must be annotated differently.
 
 #### 5.4.3 `itcl::widget NAME { BODY }`, `itcl::extendedclass NAME { BODY }`
 
@@ -210,7 +244,7 @@ The `inherit` directive in an `itcl::class` body lists one or more base classes 
 
 - `package require NAME ?VERSION?` → append `NAME` to the enclosing scope's `package_requires` array. NOT a callee.
 - `package provide NAME ?VERSION?` → append `{name: NAME, version: VERSION_OR_NULL}` to `package_provides`. NOT a callee.
-- `source PATH` → append the verbatim PATH literal to `imports`. NOT a callee. If PATH is a variable substitution, omit the entry and add an `unresolved_dispatches` entry with `subkind: "computed_namespace"` (re-purposing the bucket for dynamic source paths) and `raw` containing the source line.
+- `source PATH` → append the verbatim PATH literal to `imports`. NOT a callee. If PATH is a variable substitution, omit the entry and add an `unresolved_dispatches` entry with `subkind: "computed_source"` and `raw` containing the source line.
 
 Scope of attachment:
 - File-level top-level declarations → `file_level` block.
@@ -224,14 +258,16 @@ Scope of attachment:
 
 When the first argument is a literal command word and the remaining arguments are values (`$var`, lists, literals), `eval foo $args` is equivalent to direct invocation of `foo`.
 
-- Annotation: `{name: "foo", kind: "static"}`. Record the call as though the `eval` wrapper were not present.
-- Rationale follows from spec: the concat-then-evaluate semantics, given a literal first word, deterministically produces a call to that word.
+- Annotation: `{name: "foo", kind: "static"}`. Record the call as though the `eval` wrapper were not present — Tier filters (§7.1) then apply normally. If `foo` is Tier 2 (`set`, `incr`, `lappend`, …) or Tier 3 (`puts`, `error`, …), do NOT emit a callee.
+- Worked examples: `eval lappend _all $args` → no callee emitted (Tier 2 filtering applies after collapse); `eval itk_initialize $args` → `{name: "itk_initialize", kind: "static"}` (not on any Tier filter).
+- Rationale follows from spec: the concat-then-evaluate semantics, given a literal first word, deterministically produces a call to that word; filtering then proceeds as for any direct call.
 
 #### 5.8.2 `eval $script ...` (D3 — variable first word)
 
 When the first effective argument is a variable substitution (`eval $cmd`, `eval $obj method args`), the callee identity is determined at runtime.
 
 - If the form is `eval $obj method args` (object dispatch through eval), emit `{name: "method", kind: "unresolved", note: "eval dispatch through dynamic receiver"}` and add an `unresolved_dispatches` entry with `subkind: "eval_var"`. The method name remains the primary searchable key.
+- If the form is `eval $cb args` (callback-through-eval — a variable holding a callback prefix is dispatched with appended args; v1.3 P3.1 clarification), treat as a §6.12-style variable-bound callback site: emit `{name: "?", kind: "unresolved", note: "eval $cb args"}` and add `subkind: "callback_var"`. Rationale: the semantic match (a callback prefix is being invoked at this line) is closer to §6.12 than to a bare eval_var dispatch. Examples: `eval $_callback [list $response]`, `eval $_errorCallback $this`. The variable name (e.g. `_callback`, `_errorCallback`) is preserved verbatim in the `raw` field of the `unresolved_dispatches` entry for human reference.
 - If the form is `eval $cmd` with no other static words, emit `{name: "?", kind: "unresolved"}` and add `subkind: "eval_var"`.
 
 #### 5.8.3 `eval [foo ...] ARGS` (bracket first word)
@@ -251,11 +287,19 @@ The result of a bracket substitution is the first word. The result is a value, n
 
 ### 5.10 Ensemble subcommands (D2)
 
-Documented ensemble commands have a fixed set of subcommands listed in their man pages. The most common are `string`, `dict`, `info`, `array`, `chan`, `namespace`, `file`, `clock`, `package` ([info.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/info.htm), [namespace.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/namespace.htm), [package.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/package.htm), and the TclCmd index at [contents.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/contents.htm)).
+Documented ensemble commands have a fixed set of subcommands listed in their man pages. The canonical set (matching §7.1 Tier 2 and §7.5) is `string`, `dict`, `info`, `array`, `chan`, `namespace`, `file`, `clock`, `package`, `binary`, `encoding` ([info.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/info.htm), [namespace.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/namespace.htm), [package.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/package.htm), and the TclCmd index at [contents.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/contents.htm)).
 
 A line such as `string length $s` semantically invokes the `string` ensemble dispatcher with subcommand `length`. The runtime may internally compile this to a specialized bytecode, an FQN command rewrite, or a generic ensemble dispatch — those are implementation details below the convention.
 
 - Annotation (Layer A statement): the call site invokes the ensemble dispatcher; the searchable callee identity is the 2-word phrase. This rule is encoded under Layer B because the choice of 2-word naming is convention. See §7.5 for the rule and rationale.
+
+**Tk geometry and window-management ensembles.** `grid`, `pack`, `place`, `wm`, and `winfo` ([grid.htm](https://www.tcl-lang.org/man/tcl8.6/TkCmd/grid.htm), [pack.htm](https://www.tcl-lang.org/man/tcl8.6/TkCmd/pack.htm), [place.htm](https://www.tcl-lang.org/man/tcl8.6/TkCmd/place.htm), [wm.htm](https://www.tcl-lang.org/man/tcl8.6/TkCmd/wm.htm), [winfo.htm](https://www.tcl-lang.org/man/tcl8.6/TkCmd/winfo.htm)) are also documented ensembles, but UNLIKE the Tier 2 ensembles above they ARE architectural callees and MUST be recorded. They use the same 2-word naming convention (`grid forget`, `grid rowconfigure`, `grid columnconfigure`, `grid propagate`, `pack configure`, `wm title`, `winfo children`, …) when the second word is a literal subcommand. A bare single-word form (`grid $w`, `pack $w`) — when the second word is a value, not a subcommand — is recorded as `static` with name `"grid"` / `"pack"` per §5.1. The distinction is whether the second word is a documented ensemble subcommand for that command. These ensembles are NOT on the §7.1 Tier 2 filter list — they are kept.
+
+**Qualified-name-vs-ensemble precedence (v1.3 P3.1 canary follow-up).** When the first word of a command is a §5.2 qualified name (containing `::`) followed by what would otherwise look like an ensemble subcommand of a different command (e.g. `::dcss configure $name $value`), the qualified-name interpretation takes precedence: record as 1-word `{name: "::dcss", kind: "qualified"}`, NOT as 2-word `{name: "::dcss configure", kind: "qualified"}`. The 2-word ensemble naming convention applies only when the first word is itself a documented ensemble dispatcher (`string`, `dict`, `info`, etc. per §5.10's ensemble list) OR a kept Tk ensemble (`grid`, `pack`, `wm`, `winfo`, `image`). A `::namespace command` form is a §5.2 call to the `::namespace command` proc/method; the second word is data, not an ensemble subcommand.
+
+**Tk `image create TYPE` (3-word phrase, v1.3 P3.1).** `image create TYPE NAME ?options?` ([image.htm](https://www.tcl-lang.org/man/tcl8.6/TkCmd/image.htm)) is a documented exception to the 2-word ensemble naming rule. The `image` command's `create` subcommand takes the image type (e.g. `photo`, `bitmap`) as the third word; the combination is meaningful for refactor/find-references navigation. Record `image create photo`, `image create bitmap`, etc. as 3-word static callees with `kind: "static"` and `name: "image create <TYPE>"`. The 2-word fallback `image create` (when TYPE is variable-substituted) is recorded with `kind: "unresolved"` and `subkind: "var_command"`. Other `image` subcommands (`image delete`, `image height`, `image inuse`, `image names`, `image type`, `image types`, `image width`) follow the standard 2-word naming.
+
+**iTcl `delete`.** The iTcl `delete` command (see the [ItclCmd index](https://www.tcl-lang.org/man/tcl/ItclCmd/index.html); the dedicated `itcldelete.html` page returned HTTP 404 at the time of v1.2 authoring) has subcommands `object`, `class`, `namespace`. Record as a 2-word phrase: `delete object`, `delete class`, `delete namespace` with `kind: "static"`. Not on the Tier 2 filter list.
 
 ### 5.11 Bracket substitution `[foo arg]`
 
@@ -288,6 +332,7 @@ Additional patterns that yield `kind: "unresolved"` plus an `unresolved_dispatch
 | `eval $foo` (variable first word) | `eval_var` | `eval $script` |
 | `apply $fn ARGS` | `computed_lambda` | `apply $h $arg` |
 | `namespace eval $ns BODY` | `computed_namespace` | `namespace eval $owner {...}` |
+| `source $path` (dynamic source path) | `computed_source` | `source $config_file` |
 | Callback flag with `$var` value | `callback_var` | `-command $cb` |
 
 In every case the static `callees` list also receives an entry with the best available name (the method word, the lambda result, or `"?"` if nothing is recoverable). The `note` field MAY carry the verbatim source fragment as an aid to human readers; the `unresolved_dispatches` entry's `raw` field holds the same fragment in its canonical form.
@@ -303,6 +348,7 @@ This section continues Layer A with constructs whose annotation form is fixed by
 [body.html](https://www.tcl-lang.org/man/tcl/ItclCmd/body.html) and [configbody.html](https://www.tcl-lang.org/man/tcl/ItclCmd/configbody.html).
 
 - `itcl::body className::methodName ARGS BODY` — emit a `method` symbol (or `constructor`/`destructor` if the qualified name matches) with `qualified_name: "className::methodName"`. Walk BODY for inner callees. The `itcl::body` invocation itself does not appear as a callee in any enclosing scope; it is a declaration.
+- **Forward-declaration dedup:** if both a class-body forward declaration (per §5.5, an in-class `method NAME` without a body) and an out-of-line `itcl::body` exist for the same `qualified_name`, emit ONE symbol — use the body's `line`/`end_line` as canonical. The forward declaration is not emitted as a separate symbol; downstream rename/refactor tools that need its location can find it via textual search of the source.
 - `itcl::configbody className::varName BODY` — emit a `configbody` symbol with `qualified_name: "className::varName"`. The `visibility` field is `"public"` (configbody applies only to public variables). Walk BODY.
 - The variable bound to a configbody is NOT itself a symbol in this convention; only the body is. Downstream consumers that need the variable name parse it from the `qualified_name` suffix.
 
@@ -319,7 +365,7 @@ This section continues Layer A with constructs whose annotation form is fixed by
 
 - Emit a symbol with `kind: "coroutine"`, `qualified_name` = the literal NAME.
 - If COMMAND is a literal command word, the coroutine symbol's `callees` includes `{name: "<COMMAND>", kind: "static"}` at the `coroutine` line. Optionally walk the called proc's body in a separate annotation pass.
-- If COMMAND is a script (a brace literal), walk it as the coroutine body and attribute its inner callees to the coroutine symbol.
+- If COMMAND is a script (a brace literal), walk it as the coroutine body and attribute its inner callees to the coroutine symbol. **(By-analogy extension)** — the [coroutine.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/coroutine.htm) spec describes COMMAND as a command word; treating a brace-literal in COMMAND position as a walkable body is a convention-level analogy to `apply {args body}` (§5.9), not a direct spec claim.
 - `yield` and `yieldto` inside the coroutine body are flow-control primitives (Tier 1; §7.1) and are NOT recorded as callees.
 
 ### 6.4 Inline lambdas via `apply` — see §5.9
@@ -363,8 +409,9 @@ These commands all accept a SCRIPT argument that is evaluated at event time:
 - `trace add variable VAR OPS COMMAND_PREFIX` — `COMMAND_PREFIX` is a callback prefix; the trace appends `name1 name2 op` and invokes it.
 - `trace add command CMD OPS COMMAND_PREFIX` — similar; appended `oldName newName op`.
 - `trace add execution CMD OPS COMMAND_PREFIX` — similar; appended command-string and execution metadata.
+- `socket -server CMDPREFIX ?-myaddr ADDR? PORT` ([socket.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/socket.htm)) — CMDPREFIX is a callback prefix invoked with three appended args (channel, host, port) on each accepted connection. Treat per §6.12: source `socket -server [list $this accept] -myaddr $host $port` records exactly ONE callee `{name: "accept", kind: "callback"}`; the dispatcher `socket` is NOT recorded as a callee.
 
-For each: treat SCRIPT according to §6.12 (callback site).
+For each: treat SCRIPT (or `-server` CMDPREFIX) according to §6.12 (callback site). **(Layer B filtering choice; see §7.1.)** The dispatcher command itself (`bind`, `after`, `fileevent`, `trace add ...`, `socket -server`) is NOT recorded as a `static` callee — only the SCRIPT's callee per §6.12 is recorded. Source `after 1000 [list $this listen]` produces exactly ONE callee: `{name: "listen", kind: "callback"}` — neither `after` nor `bind` may appear as a static callee. This is a recurring annotator/arbiter error.
 
 ### 6.10 Tk widget creation and configure callbacks
 
@@ -380,13 +427,14 @@ Treat each callback-flag value according to §6.12.
 
 - The option declaration is NOT itself a symbol in this convention.
 - For each handler-method value, emit a callee with `{name: "<method-name>", kind: "callback", note: "-validatemethod" | "-configuremethod" | "-cgetmethod"}` attributed to the enclosing class's `constructor` (the natural lexical container) or, if the option declaration occurs outside a constructor, to a synthetic file-level entry.
+- For the dynamic-method-name variants `-validatemethodvar`, `-configuremethodvar`, `-cgetmethodvar`, the value is a variable whose contents name the actual method at runtime. Emit `{name: "?", kind: "unresolved", note: "-<flag-name>"}` and add an `unresolved_dispatches` entry with `subkind: "callback_var"`. The dynamic-variant flags themselves are documented in [itcloption.html](https://www.tcl-lang.org/man/tcl/ItclCmd/itcloption.html).
 
 ### 6.12 Callback / script sites (D5, D8 + Layer B naming)
 
 A **callback site** is any of:
 
 1. A script-accepting Tk/iTk command (§6.9) — `bind`, `after`, `fileevent`, `trace add variable`, `trace add command`, `trace add execution`, `coroutine` (when given a script), `itk_initialize` when given a body.
-2. A callback-flag option on widget creation or `widget configure` (§6.10): `-command`, `-validatecommand`, `-invalidcommand`, `-postcommand`, `-yscrollcommand`, `-xscrollcommand`, `-tearoffcommand`, and any other `-flag CALLBACK` documented in the widget's man page as accepting a callback prefix.
+2. A flag option on widget creation or `widget configure` whose VALUE matches the pure-callback pattern (defined below) — regardless of whether the flag is on the Tk-core documented list. This covers the Tk-core flags `-command`, `-validatecommand`, `-invalidcommand`, `-postcommand`, `-yscrollcommand`, `-xscrollcommand`, `-tearoffcommand`, AND any vendor flag (`-onClick`, `-onChange`, `-selectioncommand`, etc.) whose value is shaped like a callback. Recognition is value-shape-driven, not flag-name-driven: the §6.10 Tk-core flag list is illustrative, not exhaustive.
 
 For each callback site, classify the script form:
 
@@ -395,7 +443,7 @@ For each callback site, classify the script form:
   - `[list $this method args...]`
   - `"method args..."` (no receiver; bare method literal)
   - `{method args...}` (brace-literal callback prefix)
-  Annotation: `{name: "method", kind: "callback"}`. The `note` field MAY carry the receiver form.
+  Annotation: `{name: "method", kind: "callback"}`. The `name` field is ALWAYS the method word from the callback prefix — NEVER the dispatcher (`bind`/`after`/etc.) or the flag name (`-command`/`-onClick`/etc.). Worked example: source `bind $w <Delete> [list $obj removeBeamline]` produces exactly ONE callee `{name: "removeBeamline", kind: "callback"}`; the dispatcher `bind` is NOT a callee (§6.9), the tag/sequence args are data, and the method word `removeBeamline` is the callback name. The `note` field MAY carry the receiver form for human readability.
 
 - **Multi-command script** — multiple commands separated by newline or `;`, or a brace-literal containing a multi-command body.
   Annotation: walk the script as a sub-script per §5.11 / §6.7. Each top-level command becomes a separate callee with its own kind (`static`, `qualified`, `method_dispatch`, etc.).
@@ -424,31 +472,41 @@ Walking the Tcl/iTcl AST literally would emit `set`, `incr`, `if`, `expr`, etc. 
 
 **Tier 1 — Control flow & flow keywords (NOT callees; bodies walked).**
 
-`if`, `else`, `elseif`, `while`, `for`, `foreach`, `switch`, `catch`, `try`, `on`, `trap`, `finally`, `return`, `break`, `continue`, `yield`, `yieldto`.
+`if`, `else`, `elseif`, `while`, `for`, `foreach`, `lmap`, `time`, `switch`, `catch`, `try`, `on`, `trap`, `finally`, `return`, `break`, `continue`, `yield`, `yieldto`.
+
+`lmap LIST BODY` ([lmap.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/lmap.htm)) is a sibling of `foreach`. `time { script } ?count?` ([time.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/time.htm)) evaluates a body for benchmarking; the body IS walked, the dispatcher `time` is NOT a callee.
 
 Rationale: these primitives structure execution but say nothing about *what* is being called. Walking their bodies preserves inner calls attributed to the enclosing user-defined symbol — which is what "where does this function call X?" needs.
 
 How to apply: do NOT add to `callees`. Walk each script-argument position (e.g. `if EXPR BODY ?elseif EXPR BODY...? ?else BODY?` per [Tcl.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/Tcl.htm)) for inner callees.
 
+**NOT Tier 2 — Tk widget creation and geometry commands ARE legitimate static callees per §5.1.** The commands `grid`, `pack`, `place`, `bind`, `frame`, `button`, `label`, `toplevel`, `listbox`, `text`, `canvas`, `scale`, `menu`, `entry`, `checkbutton`, `radiobutton`, `wm`, `winfo`, `tk`, `image`, `font`, `option` — and any other Tk widget/geometry primitives — are NOT on the Tier 2 list below and MUST be recorded as `static` callees when they appear as literal first words. Filtering them is a recurring annotator error. (Their callback-flag values are still handled separately per §6.12; the dispatcher itself remains a real static callee EXCEPT when listed in §6.9 as a script-accepting command — those have `bind`/`after`/`fileevent`/`trace add ...` themselves omitted, only their SCRIPT's callee recorded.)
+
 **Tier 2 — Value and list manipulation (NOT callees; not walked).**
 
-`set`, `incr`, `unset`, `lappend`, `lassign`, `lset`, `lreplace`, `llength`, `lrange`, `lsearch`, `lsort`, `lindex`, `linsert`, `lrepeat`, `lreverse`, `split`, `join`, `format`, `scan`, `expr`, `regexp`, `regsub`, `subst`. ALL subcommands of: `string`, `dict`, `info`, `array`, `clock`, `chan`, `file`, `binary`.
+`set`, `incr`, `unset`, `lappend`, `lassign`, `lset`, `lreplace`, `llength`, `lrange`, `lsearch`, `lsort`, `lindex`, `linsert`, `lrepeat`, `lreverse`, `list`, `split`, `join`, `format`, `scan`, `expr`, `regexp`, `regsub`, `subst`, `concat`, `eof`, `seek`, `tell`, `flush`, `global`, `variable`. ALL subcommands of these documented ensembles: `string`, `dict`, `info`, `array`, `clock`, `chan`, `file`, `binary`, `namespace`, `package`, `encoding`.
 
-Rationale: pure data operations. Filtering them dramatically improves signal-to-noise without losing architectural information.
+`global` and `variable` are formalized as Tier 2 in v1.3, codifying the Phase 2 arbiter verdicts on Clock.tcl and DEG_HORZ.tcl which ruled them variable-scope utilities analogous to `upvar` (§5.13), not architectural callees.
 
-How to apply: do NOT add to `callees`. Do NOT walk argument scripts — except `dict for` and `dict update`, whose body IS walked (still not recorded as a callee). Bracketed substitutions inside arguments are always walked under §5.11.
+Rationale: pure data operations and variable-scope binding. Filtering them dramatically improves signal-to-noise without losing architectural information.
 
-**Tier 3 — I/O and error.**
+How to apply: do NOT add to `callees`. Do NOT walk argument scripts — except `dict for`, `dict update`, `dict with`, `dict map`, and `dict filter` (script form), whose body IS walked (still not recorded as a callee). Bracketed substitutions inside arguments are always walked under §5.11.
 
-`puts`, `gets`, `read`, `error`, `throw`, `return -code error ...`.
+**Tier 3 — I/O, error, and event-loop primitives.**
 
-Rationale: not architectural call edges. Excluding them mirrors what a human reader skims past.
+`puts`, `gets`, `read`, `open`, `close`, `update`, `vwait`, `error`, `throw`, `return -code error ...`.
+
+`open` and `close` are added in v1.3 because they appear constantly in real-world code with no architectural value — the call edge of interest is the bytes-on-channel transfer, not the channel constructor. `update` and `vwait` are event-loop primitives whose I/O-shaped semantics align with the rest of Tier 3.
+
+Rationale: not architectural call edges. The actual I/O target (channel, file, event) is the architectural fact, recorded elsewhere; the dispatcher is data-handling overhead.
 
 How to apply: do NOT add to `callees`.
 
 **Tier 4 — Declarations (produce a symbol entry; bodies walked).**
 
-`proc`, `method` (and `public`/`private`/`protected method`), `proc` inside a class body, `itcl::body`, `itcl::configbody`, `constructor`, `destructor`, `namespace eval`, `itcl::class`, `itcl::widget`, `itcl::extendedclass`, `class` (custom DSL §5.4.2), `oo::class create`, `coroutine`, `itk_component add`, `itk_option define`, `itcl::option`, `itcl::component`.
+`proc`, `method` (and `public`/`private`/`protected method`), `proc` inside a class body, `itcl::body`, `itcl::configbody`, `constructor`, `destructor`, `namespace eval`, `itcl::class`, `itcl::widget`, `itcl::extendedclass`, `class` (custom DSL §5.4.2), `oo::class create`, `oo::define`, `oo::objdefine`, `coroutine`, `itk_component add`, `itk_option define`, `itcl::option`, `itcl::component`, `interp create`.
+
+`oo::define CLASS BODY` and `oo::objdefine OBJ BODY` (TclOO) augment an existing class/object with `method`, `mixin`, `forward`, `superclass`, `constructor`, `destructor` directives. The BODY is walked as a class-body grammar; new methods produce symbol records attributed to the augmented class. `interp create NAME` introduces a subordinate-interpreter command callable as `NAME eval SCRIPT`; treat as a declaration producing a symbol with `kind: "namespace"` and `qualified_name` = NAME (the subordinate interpreter acts as a callable namespace from the parent).
 
 Rationale: each names a callable, container, or component. Emitting symbol records is the point.
 
@@ -456,11 +514,13 @@ How to apply: do NOT add to `callees`. DO emit a symbol record (per §4.1) where
 
 **Tier 5 — Imports / structural (populate dedicated fields; not callees).**
 
-`package require`, `package provide`, `source`, `inherit`, `superclass`, `namespace import`, `namespace export`.
+`package require`, `package provide`, `source`, `inherit`, `superclass`, `namespace import`, `namespace export`, `auto_load`, `auto_import`, `tm path add`.
+
+`auto_load`, `auto_import`, and `tm path add` (Tcl module path manipulation) participate in the dependency/loading surface but produce no architectural call edge of interest; they are noted by their structural side-effect and not recorded as callees.
 
 Rationale: structural facts (dependencies, provides, includes, inheritance) belong in dedicated fields, not interleaved with `callees`.
 
-How to apply: populate `package_requires`, `package_provides`, `imports`, `parent_classes` per §5.6 / §5.7. An optional `namespace_imports` array MAY be added by implementers for `namespace import`/`export`.
+How to apply: populate `package_requires`, `package_provides`, `imports`, `parent_classes` per §5.6 / §5.7. An optional `namespace_imports` array MAY be added by implementers for `namespace import`/`export` (not formalized in §4 schema yet).
 
 ### 7.2 Unresolved-pattern naming conventions
 
@@ -470,6 +530,8 @@ Static analysis cannot resolve every callee. When the call is dynamic, the conve
   **Rationale:** the method word is the most refactor-useful key; renaming the method requires touching every call site, and lexical search on the method word is the cheapest discovery path.
 - Method-position word is also dynamic (`$obj $m`): `name` = `"?"`.
   **Rationale:** nothing useful is statically recoverable; the `?` literal flags the line as a known-blind spot in downstream UI.
+- **Variable substitution mid-token in command-position word** (`create${tt}Tab`, `do${what}`, `process${type}Event`): `name` = `"?"`, `subkind: "var_command"` (v1.3 P3.1 canary follow-up).
+  **Rationale:** the literal interpolated text (e.g. `"create${tt}Tab"`) is not the runtime command name — the variable could expand to any string. Embedding the source-form literal in `name` produces a useless search key (no proc named `create${tt}Tab` exists) and confuses find-references tooling. The `?` literal is the consistent unresolved marker; the original source fragment goes in `note` / `unresolved_dispatches.raw` for human reference.
 - Callback-flag with `$var` value (`-command $cb`): `name` = `"?"`, `subkind: "callback_var"`.
   **Rationale:** same as above; the `subkind` discriminator lets a UI explain "this is a dynamic callback, not a missing call".
 - `eval`-through-dynamic forms: `name` = method word if any, else `"?"`.
@@ -501,17 +563,19 @@ For documented ensembles (`string`, `dict`, `info`, `array`, `chan`, `file`, `cl
 
 **How to apply:** when the first word matches a documented ensemble name and the second word is a literal, record the call as `{name: "<ensemble> <subcommand>", kind: "ensemble"}` — but only when an implementer wishes to surface ensemble calls at all. By default, Tier 2 excludes ensembles (`string`, `dict`, `info`, `array`) from `callees` entirely. Implementations that want richer ensemble visibility re-enable specific ensembles by removing them from Tier 2; the recording form is fixed by this rule.
 
+**Exception — kept ensembles.** Per the §5.10 carve-out, the Tk geometry / window-management ensembles (`grid`, `pack`, `place`, `wm`, `winfo`) and the iTcl `delete` command are NOT on the Tier 2 filter and ARE recorded — using the same 2-word naming form (`grid forget`, `pack configure`, `wm title`, `winfo children`, `delete object`). For these, use `kind: "static"` (not `"ensemble"`) since they are kept as architectural callees and the `ensemble` kind is reserved for ensembles whose default surfacing is opt-in.
+
 ### 7.6 Empty bodies always emit a symbol
 
 When a declaration creates a symbol with no body (`proc foo {} {}`, `method m {} {}`), still emit the symbol with `callees: []` and `end_line` equal to the line of the empty body. Never omit the symbol; never set `callees` to `null`.
 
 **Rationale:** consumers depend on the symbol existing so that `find_references` and `get_outline` queries return predictable shapes. An empty proc is part of the architecture (often a stub awaiting implementation).
 
-### 7.7 Comments are ignored
+### 7.7 Comments are ignored (Layer A — parser prerequisite)
 
-Tcl `#` comments at command position are stripped per Tcl(n) rule [10] ([Tcl.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/Tcl.htm)). They produce no symbols and no callees.
+Tcl `#` comments at command position are stripped per Tcl(n) rule [10] ([Tcl.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/Tcl.htm)). They produce no symbols and no callees. Comments inside braced strings are also ignored (they are not parsed as commands).
 
-**Rationale:** spec-mandated parser behavior is restated here because it would otherwise be implicit. Comments inside braced strings are also ignored (they are not parsed as commands).
+**Note:** this is spec-mandated parser behavior, not a Layer B convention choice. It is restated here for clarity because annotators must not record comment-line content as callees or symbols.
 
 ---
 

@@ -205,6 +205,7 @@ LANGUAGE_EXTENSIONS = {
     ".tcl": "tcl",
     ".tk": "tcl",
     ".itcl": "tcl",
+    ".itk": "tcl",
     # D
     ".d": "dlang",
     ".di": "dlang",

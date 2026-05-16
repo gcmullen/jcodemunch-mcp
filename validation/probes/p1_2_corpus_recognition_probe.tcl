@@ -3,7 +3,7 @@
 # p1_2_corpus_recognition_probe.tcl — P1.2 Strategy A walker exit gate
 # per WALKER_CONTRACT_v2_2 §8, generalized for cross-codebase coverage.
 #
-# Walks every reachable .tcl/.itcl file under ROOT through
+# Walks every reachable .tcl/.itcl/.itk file under ROOT through
 # parser::disassemble_and_parse + walker::walk and counts events of
 # kind=="unrecognized". Exit 0 iff the count is zero. On failure, prints
 # the first 10 unrecognized events with file:line for triage AND a
@@ -20,7 +20,7 @@
 #   tclsh validation/probes/p1_2_corpus_recognition_probe.tcl \
 #       [--root PATH | --bluice-root PATH] [--no-synthetic]
 #
-# --root PATH         walks PATH recursively, ALL .tcl/.itcl files (no
+# --root PATH         walks PATH recursively, ALL .tcl/.itcl/.itk files (no
 #                     scope filter). Use for non-bluice codebases.
 # --bluice-root PATH  back-compat alias; uses the bluice scope filter
 #                     (BluIceWidgets / DcsWidgets / dcs-lib-tcl/main/scripts /
@@ -57,7 +57,7 @@ while {$argv_idx < [llength $::argv]} {
 
 proc collect_corpus {root scope_filter} {
     if {!$scope_filter} {
-        # Cross-codebase mode: walk root recursively, all .tcl/.itcl.
+        # Cross-codebase mode: walk root recursively, all .tcl/.itcl/.itk.
         return [lsort -unique [recursive_glob_tcl $root]]
     }
     # Bluice scope filter: documented subdirs only.
@@ -84,7 +84,7 @@ proc collect_corpus {root scope_filter} {
 
 proc recursive_glob_tcl {dir} {
     set out [list]
-    foreach pat {*.tcl *.itcl} {
+    foreach pat {*.tcl *.itcl *.itk} {
         catch {
             foreach f [glob -nocomplain -directory $dir $pat] {
                 lappend out $f
