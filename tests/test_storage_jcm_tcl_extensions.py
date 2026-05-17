@@ -494,20 +494,24 @@ class TestBranchDeltaDoesNotCarryForkExtensionData:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestVersionBumpPath:
-    """Phase 5.0 — lock the JCM_TCL_INDEX_VERSION 1→2 bump path.
+    """Lock the JCM_TCL_INDEX_VERSION bump path (originally P5.0; refactored
+    in P5.1 to be relative to the current constant so the suite survives
+    every future bump without churn).
 
-    Production constant stays at 1 until 5.1; these tests monkeypatch the
-    module-level constant to simulate the post-bump state. They prove:
+    These tests monkeypatch the module-level constant to simulate the
+    NEXT bump. They prove:
 
-    1. A v1-stamped DB is refused once the constant is bumped (forced reindex).
-    2. A DB freshly written under the bumped constant stamps v2 and loads.
+    1. A current-stamped DB is refused once the constant is bumped one
+       higher (forced reindex).
+    2. A DB freshly written under the bumped constant stamps the new
+       version and loads.
     3. The strict-load gate applies to ALL fork-built indexes, not just
-       TCL-bearing ones — correcting an inaccurate claim in
+       TCL-bearing ones — locks the contract corrected in
        PHASE5_BRIDGE_ENRICHMENT_SPIKE.md §4. Bumping JCM_TCL_INDEX_VERSION
        forces a reindex of every repo the fork has indexed.
     """
 
-    def test_v1_stamped_db_refused_after_simulated_bump_to_v2(
+    def test_current_stamped_db_refused_after_simulated_bump(
         self, tmp_path, monkeypatch, caplog
     ):
         sym = _make_class_symbol(parent_classes=[{"name": "Base", "line": 3}])
@@ -519,13 +523,14 @@ class TestVersionBumpPath:
             row = conn.execute(
                 "SELECT value FROM meta WHERE key='jcm_tcl_writer_version'"
             ).fetchone()
-            assert row is not None and int(row[0]) == 1, (
+            assert row is not None and int(row[0]) == JCM_TCL_INDEX_VERSION, (
                 "precondition: save_index must stamp the current constant "
-                "(1) before the simulated bump"
+                "before the simulated bump"
             )
 
         monkeypatch.setattr(
-            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION", 2
+            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION",
+            JCM_TCL_INDEX_VERSION + 1,
         )
         from jcodemunch_mcp.storage.sqlite_store import _cache_clear
         _cache_clear()
@@ -535,20 +540,22 @@ class TestVersionBumpPath:
             loaded = store.load_index("local", "testrepo")
 
         assert loaded is None, (
-            "after bumping JCM_TCL_INDEX_VERSION 1→2, a v1-stamped DB must "
-            "be refused (forces fresh reindex)"
+            "after bumping JCM_TCL_INDEX_VERSION by one, a current-stamped DB "
+            "must be refused (forces fresh reindex)"
         )
         msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("jcm_tcl_writer_version" in m for m in msgs), (
             f"expected a warning naming jcm_tcl_writer_version; got {msgs!r}"
         )
 
-    def test_freshly_written_db_under_bumped_v2_loads(
+    def test_freshly_written_db_under_bumped_constant_loads(
         self, tmp_path, monkeypatch
     ):
-        """Post-bump save_index stamps v2 and round-trips cleanly."""
+        """Post-bump save_index stamps the bumped version and round-trips cleanly."""
+        target_version = JCM_TCL_INDEX_VERSION + 1
         monkeypatch.setattr(
-            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION", 2
+            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION",
+            target_version,
         )
         sym = _make_class_symbol(parent_classes=[{"name": "Base", "line": 3}])
         store = _save_repo(tmp_path, [sym])
@@ -559,8 +566,8 @@ class TestVersionBumpPath:
             row = conn.execute(
                 "SELECT value FROM meta WHERE key='jcm_tcl_writer_version'"
             ).fetchone()
-            assert row is not None and int(row[0]) == 2, (
-                "save_index under bumped constant must stamp v2"
+            assert row is not None and int(row[0]) == target_version, (
+                f"save_index under bumped constant must stamp v{target_version}"
             )
 
         from jcodemunch_mcp.storage.sqlite_store import _cache_clear
@@ -608,7 +615,8 @@ class TestVersionBumpPath:
         )
 
         monkeypatch.setattr(
-            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION", 2
+            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION",
+            JCM_TCL_INDEX_VERSION + 1,
         )
         from jcodemunch_mcp.storage.sqlite_store import _cache_clear
         _cache_clear()
@@ -626,3 +634,253 @@ class TestVersionBumpPath:
         assert any("jcm_tcl_writer_version" in m for m in msgs), (
             f"expected a warning naming jcm_tcl_writer_version; got {msgs!r}"
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 7: P5.1 — callees + args round-trip
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestCalleesAndArgsRoundTrip:
+    """save_index → load_index must preserve Symbol.callees + Symbol.args.
+
+    Both fields are TCL-only on the wire (additive Symbol fields with []
+    defaults) and serialize through the jcm_tcl_extensions side-table as
+    callees_json / args_json typed columns.
+    """
+
+    def test_callees_round_trips_through_save_and_load(self, tmp_path):
+        callees = [
+            {"name": "addListener", "line": 12, "kind": "method_dispatch",
+             "receiver_hint": "$clock", "note": "$clock addListener"},
+            {"name": "msgcat::mc", "line": 18, "kind": "qualified",
+             "receiver_hint": None, "note": None},
+            {"name": "pack", "line": 22, "kind": "method_dispatch",
+             "receiver_hint": "$w", "note": "$w pack"},
+        ]
+        sym = Symbol(
+            id="src/foo.tcl::proc1#function",
+            file="src/foo.tcl",
+            name="proc1",
+            qualified_name="proc1",
+            kind="function",
+            language="tcl",
+            signature="proc proc1 {} {}",
+            callees=callees,
+        )
+        store = _save_repo(tmp_path, [sym])
+
+        loaded = store.load_index("local", "testrepo")
+        assert loaded is not None, "save_index produced no loadable index"
+        loaded_sym = loaded.get_symbol(sym.id)
+        assert loaded_sym is not None
+        assert loaded_sym.get("callees") == callees, (
+            f"expected callees={callees!r}, got {loaded_sym.get('callees')!r} — "
+            f"side-table callees_json is not wired through the load path"
+        )
+
+    def test_args_round_trips_through_save_and_load(self, tmp_path):
+        args = ["self", "name", "value", "options"]
+        sym = Symbol(
+            id="src/foo.tcl::configure#method",
+            file="src/foo.tcl",
+            name="configure",
+            qualified_name="Widget::configure",
+            kind="method",
+            language="tcl",
+            signature="method configure {self name value options} {}",
+            args=args,
+        )
+        store = _save_repo(tmp_path, [sym])
+
+        loaded = store.load_index("local", "testrepo")
+        assert loaded is not None
+        loaded_sym = loaded.get_symbol(sym.id)
+        assert loaded_sym is not None
+        assert loaded_sym.get("args") == args, (
+            f"expected args={args!r}, got {loaded_sym.get('args')!r} — "
+            f"side-table args_json is not wired through the load path"
+        )
+
+    def test_callees_and_args_together_with_existing_extension_fields(self, tmp_path):
+        """Symbol carrying ALL four fork-extension fields round-trips correctly."""
+        sym = Symbol(
+            id="src/foo.tcl::Widget#class",
+            file="src/foo.tcl",
+            name="Widget",
+            qualified_name="Widget",
+            kind="class",
+            language="tcl",
+            signature="itcl::class Widget",
+            parent_classes=[{"name": "Base", "line": 1}],
+            package_requires=[{"name": "Tk", "version": "8.6"}],
+            callees=[{"name": "init", "line": 5, "kind": "static",
+                      "receiver_hint": None, "note": None}],
+            args=["self"],
+        )
+        store = _save_repo(tmp_path, [sym])
+
+        loaded = store.load_index("local", "testrepo")
+        assert loaded is not None
+        loaded_sym = loaded.get_symbol(sym.id)
+        assert loaded_sym is not None
+        assert loaded_sym.get("parent_classes") == [{"name": "Base", "line": 1}]
+        assert loaded_sym.get("package_requires") == [{"name": "Tk", "version": "8.6"}]
+        assert loaded_sym.get("callees") == [
+            {"name": "init", "line": 5, "kind": "static",
+             "receiver_hint": None, "note": None}
+        ]
+        assert loaded_sym.get("args") == ["self"]
+
+    def test_symbol_with_no_callees_or_args_skips_side_table_row(self, tmp_path):
+        """Sparse-row invariant: a symbol with no fork-extension data must
+        not allocate a side-table row (regression on _jcm_tcl_extension_row's
+        all-empty short-circuit)."""
+        sym = Symbol(
+            id="src/foo.tcl::plain#function",
+            file="src/foo.tcl",
+            name="plain",
+            qualified_name="plain",
+            kind="function",
+            language="tcl",
+            signature="proc plain {} {}",
+        )
+        store = _save_repo(tmp_path, [sym])
+
+        sqlite_store = SQLiteIndexStore(base_path=str(tmp_path))
+        db_path = sqlite_store._db_path("local", "testrepo")
+        with sqlite3.connect(str(db_path)) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM jcm_tcl_extensions WHERE symbol_id = ?",
+                (sym.id,),
+            ).fetchone()
+            assert row[0] == 0, (
+                "symbol with no fork-extension data should NOT have a "
+                "jcm_tcl_extensions row (sparse-row invariant)"
+            )
+
+        # And load-side defaults are still correct.
+        loaded = store.load_index("local", "testrepo")
+        assert loaded is not None
+        loaded_sym = loaded.get_symbol(sym.id)
+        assert loaded_sym is not None
+        assert loaded_sym.get("callees", []) == []
+        assert loaded_sym.get("args", []) == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 8: P5.1 — v1-era index backward-compat (R1 from spike §7.6)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestV1IndexBackwardCompat:
+    """v1-era indexes promoted by the ALTER TABLE migration must load
+    with empty callees/args, not crash.
+
+    Per PHASE5_BRIDGE_ENRICHMENT_SPIKE.md §7.6 R1: "Old indexes with
+    jcm_tcl_writer_version = 1 must load cleanly under the new dataclass
+    + side-table schema. Dataclass field defaults (callees=[], args=[])
+    handle in-memory access; the side-table SELECT path needs explicit
+    NULL handling for callees_json / args_json when reading v1-era rows."
+
+    Under Strict-A, a v1-stamped DB is refused entirely. After reindex
+    (or after an explicit migration) the stamp is current. The R1 contract
+    here is that rows promoted by ALTER TABLE (with NULL callees_json /
+    args_json) decode as empty lists on the load path.
+    """
+
+    def test_null_callees_and_args_columns_load_as_empty_lists(self, tmp_path):
+        """A side-table row with explicit NULL callees_json / args_json
+        loads with empty lists."""
+        sym = _make_class_symbol(parent_classes=[{"name": "Base", "line": 3}])
+        store = _save_repo(tmp_path, [sym])
+
+        # save_index just stamped the current constant + populated parent_classes;
+        # callees_json / args_json are NULL on that row.
+        sqlite_store = SQLiteIndexStore(base_path=str(tmp_path))
+        db_path = sqlite_store._db_path("local", "testrepo")
+        with sqlite3.connect(str(db_path)) as conn:
+            row = conn.execute(
+                "SELECT callees_json, args_json FROM jcm_tcl_extensions "
+                "WHERE symbol_id = ?",
+                (sym.id,),
+            ).fetchone()
+            assert row is not None
+            assert row[0] is None, "precondition: callees_json should be NULL"
+            assert row[1] is None, "precondition: args_json should be NULL"
+
+        from jcodemunch_mcp.storage.sqlite_store import _cache_clear
+        _cache_clear()
+        loaded = store.load_index("local", "testrepo")
+        assert loaded is not None
+        loaded_sym = loaded.get_symbol(sym.id)
+        assert loaded_sym is not None
+        # NULL side-table columns must decode as [] (R1 contract).
+        assert loaded_sym.get("callees", []) == []
+        assert loaded_sym.get("args", []) == []
+
+    def test_alter_table_migrates_v1_schema_to_v2(self, tmp_path):
+        """Manually downgrade a v2 side-table to v1 (4 cols), invoke
+        _initialize_jcm_tcl_extensions, and assert the missing columns
+        are restored."""
+        # First create a fresh DB so we have a clean v2 side-table.
+        sym = _make_class_symbol(parent_classes=[{"name": "Base", "line": 3}])
+        store = _save_repo(tmp_path, [sym])
+
+        sqlite_store = SQLiteIndexStore(base_path=str(tmp_path))
+        db_path = sqlite_store._db_path("local", "testrepo")
+
+        # Manually downgrade the schema: drop and recreate with the v1
+        # 4-column shape, preserving rows.
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "CREATE TABLE jcm_tcl_extensions_v1_clone "
+                "(symbol_id TEXT PRIMARY KEY, parent_classes TEXT, "
+                "package_requires TEXT, extras_json TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO jcm_tcl_extensions_v1_clone "
+                "(symbol_id, parent_classes, package_requires, extras_json) "
+                "SELECT symbol_id, parent_classes, package_requires, extras_json "
+                "FROM jcm_tcl_extensions"
+            )
+            conn.execute("DROP TABLE jcm_tcl_extensions")
+            conn.execute(
+                "ALTER TABLE jcm_tcl_extensions_v1_clone RENAME TO jcm_tcl_extensions"
+            )
+            cols_before = {
+                r[1] for r in conn.execute(
+                    "PRAGMA table_info(jcm_tcl_extensions)"
+                ).fetchall()
+            }
+            assert "callees_json" not in cols_before
+            assert "args_json" not in cols_before
+
+            from jcodemunch_mcp.storage.sqlite_store import (
+                _initialize_jcm_tcl_extensions,
+            )
+            _initialize_jcm_tcl_extensions(conn)
+
+            cols_after = {
+                r[1] for r in conn.execute(
+                    "PRAGMA table_info(jcm_tcl_extensions)"
+                ).fetchall()
+            }
+            assert "callees_json" in cols_after, (
+                "_initialize_jcm_tcl_extensions must ALTER TABLE to add "
+                "callees_json on v1-era tables (R1 migration contract)"
+            )
+            assert "args_json" in cols_after
+            conn.commit()
+
+        # After migration, the existing row's parent_classes is preserved
+        # and callees/args decode as []
+        from jcodemunch_mcp.storage.sqlite_store import _cache_clear
+        _cache_clear()
+        loaded = store.load_index("local", "testrepo")
+        assert loaded is not None, (
+            "after ALTER TABLE migration a current-stamped DB must still load"
+        )
+        loaded_sym = loaded.get_symbol(sym.id)
+        assert loaded_sym is not None
+        assert loaded_sym.get("parent_classes") == [{"name": "Base", "line": 3}]
+        assert loaded_sym.get("callees", []) == []
+        assert loaded_sym.get("args", []) == []

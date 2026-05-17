@@ -33,6 +33,8 @@ class Symbol:
     unresolved_dispatches: list[dict] = field(default_factory=list)  # Dynamic-dispatch sites (Tcl: eval $var, $cmd args, pragma_*). Each: {"line": int, "kind": str, "snippet": str}.
     parent_classes: list[dict] = field(default_factory=list)  # Class inheritance (Tcl class symbols only on the wire; dataclass defaults to [] for safe consumer access). Each: {"name": str, "line": int}.
     package_requires: list[dict] = field(default_factory=list)  # Static dependencies (Tcl __script__ module symbol only on the wire; dataclass defaults to [] for safe consumer access). Each: {"name": str, "version": str|None}.
+    callees: list[dict] = field(default_factory=list)  # Per-call-site records (Tcl only on the wire; dataclass defaults to [] for safe consumer access). Each: {"name": str, "line": int, "kind": str, "receiver_hint": str|None, "note": str|None}. Convention v1.5 §4.2.
+    args: list[str] = field(default_factory=list)  # Formal parameter names (Tcl only on the wire). Convention v1.5 §4.1. param_count remains the arity (== len(args) when populated).
 
 
 

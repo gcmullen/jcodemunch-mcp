@@ -131,7 +131,7 @@ _META_KEYS = [
 # - JCM_TCL_INDEX_VERSION tracks fork-only (Tcl-bridge) extension data,
 #   stored in the side-table jcm_tcl_extensions and surfaced via the meta
 #   key `jcm_tcl_writer_version`.  Bumped when the side-table shape changes.
-JCM_TCL_INDEX_VERSION = 1
+JCM_TCL_INDEX_VERSION = 2
 
 _JCM_TCL_WRITER_VERSION_KEY = "jcm_tcl_writer_version"
 
@@ -160,8 +160,16 @@ def _initialize_jcm_tcl_extensions(conn: sqlite3.Connection) -> None:
     """Idempotently create the jcm_tcl_extensions side-table on this connection.
 
     Hybrid columns (architect adjustment): typed columns for the stable
-    fields parent_classes / package_requires, plus extras_json as the
-    Phase-2 prototype escape valve.
+    fields parent_classes / package_requires / callees_json / args_json,
+    plus extras_json as the Phase-2 prototype escape valve.
+
+    callees_json + args_json were added in P5.1 alongside the
+    JCM_TCL_INDEX_VERSION 1→2 bump.  For v1-era tables (4-col schema), the
+    PRAGMA-gated ALTER TABLE block below promotes them to v2 schema
+    in-place — SQLite has no `ADD COLUMN IF NOT EXISTS`, so column
+    presence is checked explicitly.  ALTER TABLE ADD COLUMN populates
+    existing rows with NULL, which the load path decodes as [] (the
+    R1 backward-compat contract from PHASE5_BRIDGE_ENRICHMENT_SPIKE §7.6).
 
     Stamps meta.jcm_tcl_writer_version so cross-direction loads can detect
     fork-extension version mismatches.
@@ -172,12 +180,30 @@ def _initialize_jcm_tcl_extensions(conn: sqlite3.Connection) -> None:
             symbol_id        TEXT PRIMARY KEY,
             parent_classes   TEXT,
             package_requires TEXT,
+            callees_json     TEXT,
+            args_json        TEXT,
             extras_json      TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_jcm_tcl_extensions_symbol
             ON jcm_tcl_extensions(symbol_id);
         """
     )
+    # P5.1 in-place migration: v1-era 4-col tables get callees_json + args_json
+    # added.  Idempotent (PRAGMA table_info check) so safe to run on every
+    # connect.
+    existing_cols = {
+        row[1] for row in conn.execute(
+            "PRAGMA table_info(jcm_tcl_extensions)"
+        ).fetchall()
+    }
+    if "callees_json" not in existing_cols:
+        conn.execute(
+            "ALTER TABLE jcm_tcl_extensions ADD COLUMN callees_json TEXT"
+        )
+    if "args_json" not in existing_cols:
+        conn.execute(
+            "ALTER TABLE jcm_tcl_extensions ADD COLUMN args_json TEXT"
+        )
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
         (_JCM_TCL_WRITER_VERSION_KEY, str(JCM_TCL_INDEX_VERSION)),
@@ -188,17 +214,26 @@ def _jcm_tcl_extension_row(symbol: "Symbol") -> Optional[tuple]:
     """Build the side-table row tuple for a Symbol, or None if no data to store.
 
     Skipping rows with empty fields keeps the side-table sparse — only
-    Tcl class symbols (parent_classes) and Tcl __script__ symbols
-    (package_requires) typically have data.
+    Tcl class symbols (parent_classes), Tcl __script__ symbols
+    (package_requires), and Tcl procs/methods with structured call-site
+    data (callees / args, populated in P5.2+) typically have data.
+
+    Column order matches the v2 schema in _initialize_jcm_tcl_extensions:
+    (symbol_id, parent_classes, package_requires, callees_json, args_json,
+     extras_json).
     """
     parent_classes = getattr(symbol, "parent_classes", None) or []
     package_requires = getattr(symbol, "package_requires", None) or []
-    if not parent_classes and not package_requires:
+    callees = getattr(symbol, "callees", None) or []
+    args = getattr(symbol, "args", None) or []
+    if not parent_classes and not package_requires and not callees and not args:
         return None
     return (
         symbol.id,
         json.dumps(parent_classes) if parent_classes else None,
         json.dumps(package_requires) if package_requires else None,
+        json.dumps(callees) if callees else None,
+        json.dumps(args) if args else None,
         None,  # extras_json — reserved for Phase-2 prototype fields
     )
 
@@ -1020,8 +1055,9 @@ class SQLiteIndexStore:
             if ext_rows:
                 conn.executemany(
                     "INSERT OR REPLACE INTO jcm_tcl_extensions "
-                    "(symbol_id, parent_classes, package_requires, extras_json) "
-                    "VALUES (?, ?, ?, ?)",
+                    "(symbol_id, parent_classes, package_requires, callees_json, "
+                    "args_json, extras_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     ext_rows,
                 )
 
@@ -1153,7 +1189,8 @@ class SQLiteIndexStore:
             ext_rows: Optional[list] = None
             if _has_jcm_tcl_extensions_table(conn):
                 ext_rows = conn.execute(
-                    "SELECT symbol_id, parent_classes, package_requires, extras_json "
+                    "SELECT symbol_id, parent_classes, package_requires, "
+                    "callees_json, args_json, extras_json "
                     "FROM jcm_tcl_extensions"
                 ).fetchall()
 
@@ -1295,8 +1332,9 @@ class SQLiteIndexStore:
                 if ext_rows:
                     conn.executemany(
                         "INSERT OR REPLACE INTO jcm_tcl_extensions "
-                        "(symbol_id, parent_classes, package_requires, extras_json) "
-                        "VALUES (?, ?, ?, ?)",
+                        "(symbol_id, parent_classes, package_requires, callees_json, "
+                        "args_json, extras_json) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
                         ext_rows,
                     )
 
@@ -1374,7 +1412,8 @@ class SQLiteIndexStore:
                 # _initialize_jcm_tcl_extensions ran above so the table is
                 # guaranteed present here; always read it on the cold path.
                 all_ext_rows = conn.execute(
-                    "SELECT symbol_id, parent_classes, package_requires, extras_json "
+                    "SELECT symbol_id, parent_classes, package_requires, "
+                    "callees_json, args_json, extras_json "
                     "FROM jcm_tcl_extensions"
                 ).fetchall()
             else:
@@ -1963,6 +2002,13 @@ class SQLiteIndexStore:
         pr = getattr(symbol, "package_requires", None) or []
         if pr:
             d["package_requires"] = pr
+        # P5.1 — callees + args (per-call structured records + formal-param names).
+        callees = getattr(symbol, "callees", None) or []
+        if callees:
+            d["callees"] = callees
+        args = getattr(symbol, "args", None) or []
+        if args:
+            d["args"] = args
         return d
 
     def _patch_index_from_delta(
@@ -2085,6 +2131,9 @@ class SQLiteIndexStore:
         symbols = [self._row_to_symbol_dict(r) for r in symbol_rows]
 
         # Apply fork-extension side-table data (architect CRITICAL #1 fix).
+        # P5.1: callees_json + args_json may be NULL on v1-era rows promoted
+        # by the ALTER TABLE migration; treat NULL/empty as [] (the R1
+        # backward-compat contract from PHASE5_BRIDGE_ENRICHMENT_SPIKE §7.6).
         if ext_rows:
             ext_by_id: dict[str, tuple] = {r["symbol_id"]: r for r in ext_rows}
             for sym in symbols:
@@ -2106,6 +2155,22 @@ class SQLiteIndexStore:
                     except (json.JSONDecodeError, ValueError):
                         logger.warning(
                             "Corrupted package_requires JSON for symbol %s", sym["id"],
+                        )
+                callees_raw = ext["callees_json"] if "callees_json" in ext.keys() else None
+                if callees_raw:
+                    try:
+                        sym["callees"] = json.loads(callees_raw)
+                    except (json.JSONDecodeError, ValueError):
+                        logger.warning(
+                            "Corrupted callees_json for symbol %s", sym["id"],
+                        )
+                args_raw = ext["args_json"] if "args_json" in ext.keys() else None
+                if args_raw:
+                    try:
+                        sym["args"] = json.loads(args_raw)
+                    except (json.JSONDecodeError, ValueError):
+                        logger.warning(
+                            "Corrupted args_json for symbol %s", sym["id"],
                         )
 
         # Single pass over file_rows to build all file-level dicts
