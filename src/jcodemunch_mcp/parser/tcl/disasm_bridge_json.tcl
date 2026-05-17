@@ -113,6 +113,12 @@ proc ::jcm::bridge::_symbol_to_json {sym} {
     set keywords [dict get $sym keywords]
     set parent_classes [dict get $sym parent_classes]
     set package_requires [dict get $sym package_requires]
+    # P5.2.0 — callees / args plumbing. The walker doesn't populate them
+    # yet (5.2.1+ work); defaults from _make_symbol mean both are empty
+    # lists today.  We still emit them on every symbol so the Python
+    # extractor never has to special-case absence.
+    set callees [dict get $sym callees]
+    set args_list [dict get $sym args]
 
     set udisp_json [list]
     foreach e $udisp { lappend udisp_json [_unresolved_entry_to_json $e] }
@@ -120,6 +126,8 @@ proc ::jcm::bridge::_symbol_to_json {sym} {
     foreach e $parent_classes { lappend parent_json [_class_entry_to_json $e] }
     set pr_json [list]
     foreach e $package_requires { lappend pr_json [_pkg_entry_to_json $e] }
+    set callees_json [list]
+    foreach e $callees { lappend callees_json [_callee_entry_to_json $e] }
 
     set pairs [list \
         name             [::jcm::bridge::json::string_v $name] \
@@ -136,6 +144,8 @@ proc ::jcm::bridge::_symbol_to_json {sym} {
         max_nesting      [::jcm::bridge::json::int_v $nest] \
         param_count      [::jcm::bridge::json::int_v $pcount] \
         call_references  [::jcm::bridge::json::string_list $calls] \
+        callees          [::jcm::bridge::json::list_v $callees_json] \
+        args             [::jcm::bridge::json::string_list $args_list] \
         unresolved_dispatches [::jcm::bridge::json::list_v $udisp_json] \
         decorators       [::jcm::bridge::json::string_list $decorators] \
         keywords         [::jcm::bridge::json::string_list $keywords]]
@@ -187,6 +197,37 @@ proc ::jcm::bridge::_class_entry_to_json {entry} {
     return [::jcm::bridge::json::object_v [list \
         name [::jcm::bridge::json::string_v $name] \
         line [::jcm::bridge::json::int_v $line]]]
+}
+
+proc ::jcm::bridge::_callee_entry_to_json {entry} {
+    # P5.2.0 — convention v1.5 §4.2 callee object:
+    #   {name, line, kind, receiver_hint?, note?}
+    # name/line/kind required; receiver_hint and note are optional.
+    # Walker is not yet emitting these (5.2.1+ work) — this helper exists
+    # so the JSON shape is locked the day the walker turns on.
+    set name ""
+    if {[dict exists $entry name]} { set name [dict get $entry name] }
+    set line 0
+    if {[dict exists $entry line]} { set line [dict get $entry line] }
+    set kind "static"
+    if {[dict exists $entry kind]} { set kind [dict get $entry kind] }
+    set pairs [list \
+        name [::jcm::bridge::json::string_v $name] \
+        line [::jcm::bridge::json::int_v $line] \
+        kind [::jcm::bridge::json::string_v $kind]]
+    if {[dict exists $entry receiver_hint]} {
+        set rh [dict get $entry receiver_hint]
+        if {$rh ne ""} {
+            lappend pairs receiver_hint [::jcm::bridge::json::string_v $rh]
+        }
+    }
+    if {[dict exists $entry note]} {
+        set note [dict get $entry note]
+        if {$note ne ""} {
+            lappend pairs note [::jcm::bridge::json::string_v $note]
+        }
+    }
+    return [::jcm::bridge::json::object_v $pairs]
 }
 
 proc ::jcm::bridge::_pkg_entry_to_json {entry} {

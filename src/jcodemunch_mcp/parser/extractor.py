@@ -9360,6 +9360,8 @@ def _parse_tcl_native(source_bytes: bytes, filename: str) -> "list[Symbol]":
                 unresolved_dispatches=entry.get("unresolved_dispatches", []),
                 parent_classes=entry.get("parent_classes", []),
                 package_requires=entry.get("package_requires", []),
+                callees=entry.get("callees", []),
+                args=entry.get("args", []),
                 cyclomatic=entry.get("cyclomatic", 0),
                 max_nesting=entry.get("max_nesting", 0),
                 param_count=entry.get("param_count", 0),

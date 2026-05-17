@@ -283,6 +283,8 @@ proc ::jcm::bridge::_make_symbol {args} {
         keywords         [list] \
         parent_classes   [list] \
         package_requires [list] \
+        callees          [list] \
+        args             [list] \
     ]
     foreach {k v} $args {
         dict set defaults $k $v

@@ -1717,3 +1717,66 @@ class TestDualValidate:
             # legacy_bridge_ran can be True or False; both are valid
             # (False when the tcl-native-parser branch is absent).
             assert isinstance(payload["legacy_bridge_ran"], bool)
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.0 — callees + args plumbing
+#
+# Locks the bridge → JSON → extractor pipe for the new Symbol.callees and
+# Symbol.args fields. The walker doesn't populate them yet (5.2.1+ work);
+# this test only confirms the pipe is intact and emits empty lists by
+# default. Without this lock, walker work that turns the rules on could
+# silently break the JSON encoder or the extractor dict-read.
+# ---------------------------------------------------------------------------
+
+
+class TestCalleesAndArgsPlumbing:
+    """End-to-end pipe: bridge emits callees/args as JSON arrays, the
+    Python extractor reads them into Symbol fields, defaults are []."""
+
+    def test_every_symbol_has_callees_field_default_empty(self):
+        symbols = parse_file(BASIC_PROCS, "basic.tcl", "tcl")
+        assert len(symbols) >= 2, "fixture should produce at least 2 symbols"
+        for s in symbols:
+            assert hasattr(s, "callees"), (
+                f"Symbol {s.qualified_name} missing 'callees' field — "
+                f"extractor pipe broken"
+            )
+            assert isinstance(s.callees, list), (
+                f"Symbol {s.qualified_name}.callees must be list, got "
+                f"{type(s.callees).__name__}"
+            )
+            assert s.callees == [], (
+                f"Walker doesn't populate callees yet (5.2.1+ work) but "
+                f"{s.qualified_name}.callees == {s.callees!r}"
+            )
+
+    def test_every_symbol_has_args_field_default_empty(self):
+        symbols = parse_file(BASIC_PROCS, "basic.tcl", "tcl")
+        for s in symbols:
+            assert hasattr(s, "args"), (
+                f"Symbol {s.qualified_name} missing 'args' field — "
+                f"extractor pipe broken"
+            )
+            assert isinstance(s.args, list), (
+                f"Symbol {s.qualified_name}.args must be list, got "
+                f"{type(s.args).__name__}"
+            )
+            assert s.args == [], (
+                f"Walker doesn't populate args yet (5.2.1+ work) but "
+                f"{s.qualified_name}.args == {s.args!r}"
+            )
+
+    def test_callees_field_is_per_symbol_distinct_list(self):
+        """Regression: each Symbol must own its own callees list, not a
+        shared default_factory list. Without this, walker mutations to one
+        symbol's callees would leak across all symbols."""
+        symbols = parse_file(BASIC_PROCS, "basic.tcl", "tcl")
+        assert len(symbols) >= 2
+        assert symbols[0].callees is not symbols[1].callees, (
+            "callees lists are aliased across Symbol instances — "
+            "default_factory contract is broken"
+        )
+        assert symbols[0].args is not symbols[1].args, (
+            "args lists are aliased across Symbol instances"
+        )
