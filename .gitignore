@@ -78,3 +78,9 @@ index.php
 
 # Local docs notes
 docs/
+
+# Gold-annotation corpora (Phase 3+; large LLM-generated artifacts; tracked out-of-band)
+validation/gold_annotations/conv-*/
+
+# Bridge-vs-gold diff outputs (Phase 4+; generated from bridge + gold, reproducible from tools)
+validation/bridge_outputs/conv-*/

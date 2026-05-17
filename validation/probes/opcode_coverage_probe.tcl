@@ -16,7 +16,7 @@
 
 set REPO_ROOT [file normalize [file join [file dirname [info script]] .. ..]]
 source [file join $REPO_ROOT validation probes INSTRUCTION_TABLE_8_6_14.tcl]
-source [file join $REPO_ROOT src jcodemunch_mcp parser opcode_walker.tcl]
+source [file join $REPO_ROOT src jcodemunch_mcp parser tcl opcode_walker.tcl]
 
 set tcl_table $::jcm::disasm::tcltable::TCL_INSTRUCTION_TABLE
 set walker_table $::jcm::disasm::walker::STACK_EFFECTS

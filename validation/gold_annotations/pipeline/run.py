@@ -57,7 +57,10 @@ META_PROMPTS = Path(__file__).resolve().parent / "meta_prompts"
 META_PROMPT_TEMPLATE_VERSION = "v1.0"
 
 DEFAULT_CONVENTION = REPO_ROOT / "dev-docs/specs/TCL_CALLGRAPH_CONVENTION.md"
-DEFAULT_STORAGE_PREFIX = "validation/gold_annotations/conv-v1.0/tcl-8.6"
+# storage_prefix is derived dynamically in cmd_prepare from the convention's
+# Version: field — e.g. "conv-v1.4/tcl-8.6". The slug is JOINED with
+# validation/gold_annotations/ inside corpus_dir_for(); callers MUST NOT
+# include the validation/gold_annotations/ prefix in storage_prefix.
 
 
 # ---------- helpers ----------
@@ -174,6 +177,7 @@ def cmd_prepare(args) -> int:
 
     convention_path = Path(args.convention).resolve()
     convention_version = parse_convention_version(convention_path)
+    storage_prefix = args.storage_prefix or f"conv-v{convention_version}/tcl-8.6"
     rc, conv_commit, _ = run_cmd(["git", "-C", str(REPO_ROOT), "rev-parse", "--short=7", "HEAD"])
     conv_commit = conv_commit.strip() if rc == 0 else "unknown"
 
@@ -283,7 +287,7 @@ def cmd_prepare(args) -> int:
         "convention_path": str(convention_path),
         "convention_version": convention_version,
         "convention_commit": conv_commit,
-        "storage_prefix": args.storage_prefix,
+        "storage_prefix": storage_prefix,
         "meta_prompt_template_version": META_PROMPT_TEMPLATE_VERSION,
         "jcm_head": jcm_head_sha(),
         "batches": batches_out,
@@ -646,7 +650,9 @@ def main() -> int:
     p = sub.add_parser("prepare", help="Stage sources, build prompts, fill meta-prompts.")
     p.add_argument("files", nargs="+", help="Source file paths to annotate.")
     p.add_argument("--convention", default=str(DEFAULT_CONVENTION))
-    p.add_argument("--storage-prefix", default=DEFAULT_STORAGE_PREFIX)
+    p.add_argument("--storage-prefix", default=None,
+                   help="version+interpreter slug (e.g. conv-v1.4/tcl-8.6); "
+                        "derived from convention version if omitted")
     p.set_defaults(func=cmd_prepare)
 
     p = sub.add_parser("post-annotate", help="Unwrap + audit + build gold + stage arbiters.")

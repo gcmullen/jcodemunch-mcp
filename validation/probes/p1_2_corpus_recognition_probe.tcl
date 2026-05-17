@@ -29,7 +29,7 @@
 
 set HERE [file dirname [file normalize [info script]]]
 set ROOT [file normalize [file join $HERE .. ..]]
-source [file join $ROOT src jcodemunch_mcp parser opcode_walker.tcl]
+source [file join $ROOT src jcodemunch_mcp parser tcl opcode_walker.tcl]
 
 set ROOT_DIR /home/giles/bluice
 set SCOPE_FILTER 1

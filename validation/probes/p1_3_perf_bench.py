@@ -37,7 +37,7 @@ REPO_ROOTS = [
     Path("/home/giles/bluice/dcss/scripts"),
 ]
 
-NEW_BRIDGE = Path("/home/giles/git/jcodemunch-mcp-fork/src/jcodemunch_mcp/parser/tcl_disasm_bridge.tcl")
+NEW_BRIDGE = Path("/home/giles/git/jcodemunch-mcp-fork/src/jcodemunch_mcp/parser/tcl/disasm_bridge.tcl")
 JCM_REPO = Path("/home/giles/git/jcodemunch-mcp-fork")
 OUT_PATH = Path("/home/giles/git/jcodemunch-mcp-fork/dev-docs/verdicts/P1_3_PERF_BENCH.md")
 TIMEOUT = 30  # seconds per parse

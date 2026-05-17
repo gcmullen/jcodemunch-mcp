@@ -9090,7 +9090,7 @@ import tempfile as _tempfile
 from pathlib import Path as _Path
 
 _tcl_logger = _logging.getLogger(__name__)
-_TCL_BRIDGE_SCRIPT = str(_Path(__file__).parent / "tcl_disasm_bridge.tcl")
+_TCL_BRIDGE_SCRIPT = str(_Path(__file__).parent / "tcl" / "disasm_bridge.tcl")
 _tclsh_path: "str | None | bool" = False  # False = not yet checked
 
 # Dual-validate cache: legacy bridge content fetched once per process via

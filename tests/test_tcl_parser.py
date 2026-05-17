@@ -1386,7 +1386,8 @@ def _bridge_wire_entries(source, filename):
         / "src"
         / "jcodemunch_mcp"
         / "parser"
-        / "tcl_disasm_bridge.tcl"
+        / "tcl"
+        / "disasm_bridge.tcl"
     )
     with tempfile.NamedTemporaryFile(
         "w", suffix=".tcl", delete=False, encoding="utf-8"

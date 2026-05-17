@@ -1,8 +1,10 @@
 # TCL / iTcl / Tk / iTk Call-Graph Convention
 
 **Status:** DRAFT
-**Version:** 1.3
-**Date:** 2026-05-16
+**Version:** 1.5
+**Date:** 2026-05-17
+**Changelog from v1.4 (P5.0a Snit/Clay by-analogy):** §5.4.7 added covering Snit (`snit::type` / `snit::widget` / `snit::widgetadapter`) and Clay (`clay::define`) by analogy to §5.4.1 `itcl::class`. Both are tcllib pure-Tcl OO DSLs whose body grammars match itcl::class structure. §9 out-of-scope updated to remove Snit/Clay from the external-tooling exclusion; XOTcl and other 3rd-party OO frameworks remain excluded. Enables Phase 5 bridge enrichment to cover the 35 gold-only snit/validate.tcl symbols and 16 gold-only clay.tcl `oo::define` symbols flagged by P4.3 verdict, without internally inconsistent scope.
+**Changelog from v1.3 (P4.0a F2+F3):** §7.1 Tier 4 expanded with explicit `oo::define` / `oo::objdefine` emission rules — the augmenting-form invocation is NOT a callee, BODY directives produce `method` / `forward` / `mixin` / `superclass` records on the canonical class. Closes 15 clay-specific `neither_correct` verdicts from D2 wave 3. §5.4.5 gains a forward-pointer to the new Tier 4 clause. §6.9 gains a `trace add variable VAR OPS COMMAND_PREFIX` forcing example clarifying the callback-emission shape; §5.13 gains a cross-ref noting that traces invoked via `uplevel` still follow §6.9. Closes 6 of the 17 `convention_ambiguous` verdicts. All v1.3 annotations remain valid; no schema-field changes.
 **Changelog from v1.2:** §4.1 add `args` (list-of-strings) and `arity` (int) to symbol object for callable kinds; §4.2 / §5.3 add `receiver_hint` to method_dispatch callees; §7.1 Tier 1 add `lmap`, `time`; §7.1 Tier 2 add `flush`, `seek`, `tell`, `concat`, `eof`, `global`, `variable` (the last two formalize Phase 2 arbiter verdicts on Clock/DEG_HORZ); §7.1 Tier 2 body-walk exceptions extended to `dict with`, `dict map`, `dict filter` (script form); §7.1 Tier 3 add `open`, `close`, `update`, `vwait`; §7.1 Tier 4 add `oo::define`, `oo::objdefine`, `interp create`; §7.1 Tier 5 add `auto_load`, `auto_import`, `tm path add`; §5.10 / §7.5 add `image create TYPE` as a documented 3-word ensemble phrase (P3.1 — formalizes 5 Scan3DView Phase-2 `convention_ambiguous` verdicts); §5.8.2 extends D3 with `eval $cb args` recognition as `callback_var` (P3.1 — formalizes 1 AsyncGets ambiguity); §5.10 adds qualified-name-vs-ensemble precedence rule (`::dcss configure` is 1-word qualified, not 2-word ensemble) and §7.2 / §5.14 add `${var}`-in-callee-name handling rule (must emit `name: "?"`, not the interpolated literal) — both P3.1-canary follow-ups closing the 2 new ambiguous verdicts surfaced when BeamlineVideo was re-run under v1.3. §7.1 Tier 2 adds `list` (the value-constructor, sibling of `concat`/`lappend` — P3.1-canary-2 Clock.tcl follow-up). §5.4.2 clarifies that DSL-implementation files (e.g. files defining `proc class {...}`) are annotated as ordinary procedural Tcl, not as §5.4.2 class definers — P3.1-canary-2 git-gui/class.tcl follow-up. All v1.3 changes require re-annotation to populate (new schema fields) or to apply new filters (Tier changes). The remaining Phase 2 ambiguities (§5.14 null-line × 3, §5.1 dispute-record × 4) were tooling-side and resolved by T6 (forcing-example prompt) + T8 (honest dispute classifier) earlier in P3.0.
 **Changelog from v1.1:** §4 add `schema_version` top-level field; §4.3 add `computed_source` subkind (split from `computed_namespace`); §5.4.2 add by-analogy qualifier; §5.7 / §5.14 retarget dynamic-source-path to `computed_source`; §5.10 fix broken `itcldelete.html` citation + normalize ensemble list with §7.1/§7.5 (add `binary`, `encoding`); §6.3 add by-analogy note for brace-literal COMMAND; §6.9 explicit Layer B tag on "dispatcher is NOT a callee"; §6.11 add `-cgetmethodvar` / `-configuremethodvar` / `-validatemethodvar` callback_var variants; §7.7 reframed as parser prerequisite (no longer a Layer B rule); §4.2 `note` field policy clarified.
 **Changelog from v1.0:** §5.1 self-method clarification; §5.3 method-word literal + variable-receiver requirement; §5.8.1 Tier-filter composition with D1; §6.12 value-shape-driven callback recognition; §7.1 Tier-2 ensemble list harmonized with §7.5.
@@ -204,11 +206,35 @@ Creates or enters the namespace `NS` and evaluates BODY in that namespace contex
 
 #### 5.4.5 `oo::class create NAME { BODY }` (TclOO)
 
-The Tcl 8.6 core object system also defines classes ([TclOO contents](https://www.tcl-lang.org/man/tcl8.6/TclCmd/contents.htm)). Treat `oo::class create NAME BODY` the same as `itcl::class NAME BODY` for the purposes of this convention: emit a class symbol; inner `method` / `constructor` / `destructor` produce child symbols. Receiver dispatch (§5.3) applies uniformly to TclOO and iTcl instances.
+The Tcl 8.6 core object system also defines classes ([TclOO contents](https://www.tcl-lang.org/man/tcl8.6/TclCmd/contents.htm)). Treat `oo::class create NAME BODY` the same as `itcl::class NAME BODY` for the purposes of this convention: emit a class symbol; inner `method` / `constructor` / `destructor` produce child symbols. Receiver dispatch (§5.3) applies uniformly to TclOO and iTcl instances. The augmenting form `oo::define CLASS BODY` is covered under §7.1 Tier 4 — it produces additional `method` / `forward` / `mixin` / `superclass` records attributed to the canonical class.
 
 #### 5.4.6 `itk_component add NAME { BODY }` and `itcl::component NAME ...`
 
 `itk_component add` inside a widget body creates a sub-component widget; `itcl::component` declares a component instance variable inside an extendedclass/widget body ([itclcomponent.html](https://www.tcl-lang.org/man/tcl/ItclCmd/itclcomponent.html)). These do **not** produce callable symbols themselves — they declare component slots. The BODY of `itk_component add` is a creation script and IS walked for inner callees, attributed to the enclosing method (typically the constructor). Callback-flag options inside that creation script follow §6.12.
+
+#### 5.4.7 Tcllib pure-Tcl OO DSLs (Snit, Clay) — by analogy (v1.5)
+
+**Snit** (`snit::type NAME { BODY }`, `snit::widget NAME { BODY }`, `snit::widgetadapter NAME { BODY }`) and **Clay** (`clay::define NAME { BODY }`) are pure-Tcl object systems distributed in `tcllib` (the Tcl Library). They provide class-like declarations via metaprogramming macros, without requiring iTcl or TclOO directly. References: [Snit overview](https://core.tcl-lang.org/tcllib/wiki?name=snit), [Clay docs](https://core.tcl-lang.org/tcllib/wiki?name=clay).
+
+For static-annotation purposes, both are treated **by analogy to §5.4.1 `itcl::class`**. The outer command (`snit::type` / `snit::widget` / `snit::widgetadapter` / `clay::define`) is NOT a callee — it is a Tier 4 declaration. The BODY recognizes the following directives, producing the same kinds as §5.4.1 / §5.5 / §5.6:
+
+| Directive | Symbol emitted | Notes |
+|---|---|---|
+| `method NAME ARGS BODY` | `method` (per §5.5) | walk BODY for inner callees |
+| `typemethod NAME ARGS BODY` (Snit only) | `method` with `note: "snit typemethod"` | walk BODY |
+| `proc NAME ARGS BODY` | `class_method` (per §5.5) | walk BODY |
+| `constructor ARGS BODY` | `constructor` | walk BODY |
+| `destructor BODY` | `destructor` | walk BODY |
+| `option -NAME ?default? ?args?` | not callable (slot declaration) | callback-flag options inside `?args?` follow §6.11 |
+| `variable NAME ?value?` / `typevariable NAME ?value?` (Snit) | not callable (data declaration) | — |
+| `delegate method NAME to COMPONENT` (Snit) | `method` with empty body, `note: "delegate to <component>"` | analogous to TclOO `forward` |
+| `delegate option -NAME to COMPONENT` (Snit) | not callable | — |
+| `component NAME` (Snit) | not callable (slot declaration, analogous to §5.4.6) | — |
+| `superclass CLASS ?CLASS...?` (Clay, also valid in Snit) | not a callee; append each to `parent_classes` (§5.6) | — |
+
+The outer NAME becomes the qualified-name prefix for child symbols (e.g., `snit::type ::myapp::Widget { method m {} {...} }` produces `::myapp::Widget::m` as a method symbol). Receiver dispatch (§5.3) applies uniformly to Snit/Clay instances at call sites.
+
+**Rationale:** Snit and Clay's body grammars are structurally identical to `itcl::class` — same method/proc/constructor/destructor directives, same Tier 4 declaration shape, same outer-NAME-as-prefix model. Treating them by analogy in v1.5 (they were excluded by §9 in v1.0–v1.4) lets static analyzers cover tcllib code without per-DSL spec extensions. This rule is **Layer A by analogy** — it borrows from §5.4.1 the same way §5.4.2 borrows for vendor `class` aliases. The convention does NOT extend to XOTcl, `tcl::oo::Helpers`, or other 3rd-party OO systems; those remain out of §9 scope and may be added by future revisions if needed.
 
 ### 5.5 Method declarations and visibility
 
@@ -318,6 +344,7 @@ Tk/iTk callback and script handling is centralized in §6.12 (under Layer A sema
 
 - `uplevel ?LEVEL? SCRIPT` — the SCRIPT argument is concatenated and evaluated. Treat SCRIPT exactly like an `eval` body (§5.8): if the first effective word is a literal command, record that as a static callee of the enclosing symbol; if it is a variable substitution or bracket expression, emit unresolved per §5.8.2 / §5.8.3 with the note "via uplevel".
 - `upvar ?LEVEL? OTHERVAR LOCALVAR ...` — variable aliasing only; produces no callee.
+- **Trace+uplevel composition (v1.4):** When a `trace add variable` / `command` / `execution` is invoked via `uplevel`, the dispatcher rule from §6.9 still governs: only the COMMAND_PREFIX's first word is recorded as a §6.12 callback callee. `uplevel` does not change the classification.
 
 ### 5.14 Other unresolved variants
 
@@ -411,7 +438,7 @@ These commands all accept a SCRIPT argument that is evaluated at event time:
 - `trace add execution CMD OPS COMMAND_PREFIX` — similar; appended command-string and execution metadata.
 - `socket -server CMDPREFIX ?-myaddr ADDR? PORT` ([socket.htm](https://www.tcl-lang.org/man/tcl8.6/TclCmd/socket.htm)) — CMDPREFIX is a callback prefix invoked with three appended args (channel, host, port) on each accepted connection. Treat per §6.12: source `socket -server [list $this accept] -myaddr $host $port` records exactly ONE callee `{name: "accept", kind: "callback"}`; the dispatcher `socket` is NOT recorded as a callee.
 
-For each: treat SCRIPT (or `-server` CMDPREFIX) according to §6.12 (callback site). **(Layer B filtering choice; see §7.1.)** The dispatcher command itself (`bind`, `after`, `fileevent`, `trace add ...`, `socket -server`) is NOT recorded as a `static` callee — only the SCRIPT's callee per §6.12 is recorded. Source `after 1000 [list $this listen]` produces exactly ONE callee: `{name: "listen", kind: "callback"}` — neither `after` nor `bind` may appear as a static callee. This is a recurring annotator/arbiter error.
+For each: treat SCRIPT (or `-server` CMDPREFIX) according to §6.12 (callback site). **(Layer B filtering choice; see §7.1.)** The dispatcher command itself (`bind`, `after`, `fileevent`, `trace add ...`, `socket -server`) is NOT recorded as a `static` callee — only the SCRIPT's callee per §6.12 is recorded. Source `after 1000 [list $this listen]` produces exactly ONE callee: `{name: "listen", kind: "callback"}` — neither `after` nor `bind` may appear as a static callee. **Trace forcing example (v1.4 — closes defer.tcl `convention_ambiguous` D2 verdicts):** Source `trace add variable $v write [list $obj onWriteV]` produces exactly ONE callee `{name: "onWriteV", kind: "callback"}`. The strings `trace`, `trace add`, and `trace add variable` are ALL non-callees; only the COMMAND_PREFIX's first word is recorded. Same shape for `trace add command` and `trace add execution`. This is a recurring annotator/arbiter error.
 
 ### 6.10 Tk widget creation and configure callbacks
 
@@ -506,7 +533,18 @@ How to apply: do NOT add to `callees`.
 
 `proc`, `method` (and `public`/`private`/`protected method`), `proc` inside a class body, `itcl::body`, `itcl::configbody`, `constructor`, `destructor`, `namespace eval`, `itcl::class`, `itcl::widget`, `itcl::extendedclass`, `class` (custom DSL §5.4.2), `oo::class create`, `oo::define`, `oo::objdefine`, `coroutine`, `itk_component add`, `itk_option define`, `itcl::option`, `itcl::component`, `interp create`.
 
-`oo::define CLASS BODY` and `oo::objdefine OBJ BODY` (TclOO) augment an existing class/object with `method`, `mixin`, `forward`, `superclass`, `constructor`, `destructor` directives. The BODY is walked as a class-body grammar; new methods produce symbol records attributed to the augmented class. `interp create NAME` introduces a subordinate-interpreter command callable as `NAME eval SCRIPT`; treat as a declaration producing a symbol with `kind: "namespace"` and `qualified_name` = NAME (the subordinate interpreter acts as a callable namespace from the parent).
+`oo::define CLASS BODY` and `oo::objdefine OBJ BODY` (TclOO) augment an existing class/object with `method`, `mixin`, `forward`, `superclass`, `constructor`, `destructor` directives. The BODY is walked as a class-body grammar; new methods produce symbol records attributed to the augmented class.
+
+**`oo::define` emission shape (v1.4 — closes the 15 clay/TclOO `neither_correct` D2 verdicts).** The `oo::define` / `oo::objdefine` invocation itself is **NOT a callee** — it is a Tier 4 declaration. Recordable from BODY:
+- `method NAME ARGS BODY` → emit a `method` symbol on the augmented class (per §5.5); walk BODY for inner callees.
+- `forward NAME COMMAND_PREFIX` → emit a `method` symbol with empty body, `note: "forward to <COMMAND_PREFIX>"`. Forward target's first word is NOT recorded as a callee on the synthesized symbol (§8.8 limitation).
+- `mixin CLASS...` and `superclass CLASS...` → append each class name to the augmented class's `parent_classes` (§5.6). NOT callees.
+- `constructor ARGS BODY` / `destructor BODY` → emit `constructor` / `destructor` symbol; walk BODY.
+- Any other command inside BODY is walked as a normal sub-script (§5.11); its first word produces a static/qualified/method_dispatch callee per the usual rules.
+
+Cross-reference: §5.4.5 covers the inline form (`oo::class create`); this Tier 4 clause covers the augmenting form. Both attribute records to the canonical class symbol.
+
+`interp create NAME` introduces a subordinate-interpreter command callable as `NAME eval SCRIPT`; treat as a declaration producing a symbol with `kind: "namespace"` and `qualified_name` = NAME (the subordinate interpreter acts as a callable namespace from the parent).
 
 Rationale: each names a callable, container, or component. Emitting symbol records is the point.
 
@@ -601,7 +639,7 @@ The following are deliberately not addressed here. Future revisions or separate 
 - **Transitive-tool output formats** — call-hierarchy traversal, blast-radius computation, impact preview, and similar derived artifacts consume the JSON annotation defined here but format it for their own consumers. Those formats are out of scope.
 - **Project-specific filter whitelists** — adding or removing terms from the 5-tier filter for a particular codebase is a project policy decision, not a language-spec convention.
 - **Runtime-augmented edges** — augmenting the static graph with profiler-observed or test-coverage-observed call edges is out of scope.
-- **Edges introduced by external tooling** — `Snit`, `tcl::oo::Helpers`, `XOTcl`, `TclTk-style mega-widget toolkits` other than [incr Tk], and DSL-style domain frameworks may introduce their own callable conventions. This document covers core Tcl, Tk, [incr Tcl], and [incr Tk] only.
+- **Edges introduced by external tooling** — `tcl::oo::Helpers`, `XOTcl`, `TclTk-style mega-widget toolkits` other than [incr Tk], and other 3rd-party DSL-style domain frameworks may introduce their own callable conventions. This document covers core Tcl, Tk, [incr Tcl], [incr Tk], **and** the tcllib pure-Tcl OO DSLs Snit and Clay (covered by §5.4.7 by analogy as of v1.5). Other tcllib packages whose grammars differ structurally from these forms remain out of scope.
 - **Source-level diffs and patching** — the convention is read-only. Annotators emit JSON; they do not modify source.
 
 ---
