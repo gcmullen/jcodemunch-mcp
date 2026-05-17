@@ -13,7 +13,7 @@
 # (Worker 2 view), dev-docs/plans/PLAN_v2.1.md §2.4 (sub-tables A/B/C),
 # dev-docs/plans/PLAN_v2_2_PATCH.md §Δ0.2 (schema).
 
-source [file join [file dirname [info script]] tcl_disasm_parser.tcl]
+source [file join [file dirname [info script]] disasm_parser.tcl]
 source [file join [file dirname [info script]] compute_body_base.tcl]
 
 namespace eval ::jcm::disasm::rectbl {

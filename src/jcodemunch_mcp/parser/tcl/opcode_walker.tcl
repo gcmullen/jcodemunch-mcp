@@ -72,7 +72,7 @@
 # Method field is set only by STRCAT when the top-of-stack at the time
 # of strcat is a LITERAL — recovers " METHOD" suffix for callback shape.
 
-source [file join [file dirname [info script]] tcl_disasm_parser.tcl]
+source [file join [file dirname [info script]] disasm_parser.tcl]
 
 namespace eval ::jcm::disasm::walker {
     namespace export walk format_events

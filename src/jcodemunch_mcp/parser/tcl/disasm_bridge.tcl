@@ -22,14 +22,14 @@
 # given decision was made (mostly tied to §13 user-decided rows in the v2.2
 # contract).
 
-source [file join [file dirname [info script]] tcl_disasm_parser.tcl]
+source [file join [file dirname [info script]] disasm_parser.tcl]
 source [file join [file dirname [info script]] opcode_walker.tcl]
 source [file join [file dirname [info script]] recursion_tables.tcl]
 source [file join [file dirname [info script]] compute_body_base.tcl]
 source [file join [file dirname [info script]] unresolved_detector.tcl]
 source [file join [file dirname [info script]] pragma_scanner.tcl]
 source [file join [file dirname [info script]] bridge_postpasses.tcl]
-source [file join [file dirname [info script]] tcl_disasm_bridge_json.tcl]
+source [file join [file dirname [info script]] disasm_bridge_json.tcl]
 
 namespace eval ::jcm::bridge {
     namespace export bridge_main parse_file emit_json
