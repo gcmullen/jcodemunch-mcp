@@ -1780,3 +1780,114 @@ class TestCalleesAndArgsPlumbing:
         assert symbols[0].args is not symbols[1].args, (
             "args lists are aliased across Symbol instances"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.1 — convention §7.1 Tier 1/2/3/5 denylist filter
+#
+# Locks the post-pass at bridge_postpasses.tcl::_filter_tier_denylist.
+# Tier 1 (control flow), Tier 2 (value/list/ensemble dispatchers + upvar),
+# Tier 3 (I/O / event-loop), and Tier 5 (structural) commands must NEVER
+# surface as callees. Kept Tk ensembles (grid / pack / wm / winfo / ...)
+# stay through this filter — they're convention §5.10 carve-outs.
+# §6.9 dispatchers (bind / after / fileevent / trace) are NOT filtered
+# here; that's 5.2.7's job (callback emission + dispatcher suppression).
+# ---------------------------------------------------------------------------
+
+
+TIER_DENYLIST_FIXTURE = '''\
+proc tier_smoke {} {
+    # Tier 1 — control flow keywords (must all be filtered)
+    if {1} { foreach x {a b} { while {0} { switch x {} } } }
+    catch { return 1 } err
+    try { error "x" } on error {e} { puts $e } finally { close $f }
+    # Tier 2 — value / list / scope / ensemble dispatchers
+    set y 1
+    incr y
+    lappend lst $y
+    list a b c
+    expr {$y + 1}
+    regexp {x} $y
+    global ::g
+    variable ::v
+    upvar 1 caller_var local_var
+    string length $y
+    dict set d k v
+    info exists y
+    array names a
+    namespace export foo
+    package require Tcl
+    # Tier 3 — I/O / error / event-loop
+    puts "hello"
+    gets stdin line
+    read $fh
+    open "f.txt" r
+    close $fh
+    update
+    vwait done
+    error "boom"
+    throw {MY ERR} "msg"
+    # Tier 5 — structural (only the bare-token cases; package and
+    # namespace already covered by Tier 2)
+    source $path
+    auto_load thing
+    auto_import other
+    # Real callee that MUST survive the filter — qualified static call
+    ::my::api::do_work $y
+}
+'''
+
+
+class TestTierDenylistFilter:
+    """Tier-filtered commands must NOT appear in call_references."""
+
+    @pytest.fixture
+    def smoke_symbol(self):
+        symbols = parse_file(TIER_DENYLIST_FIXTURE, "tier.tcl", "tcl")
+        procs = [s for s in symbols if s.name == "tier_smoke"]
+        assert len(procs) == 1, (
+            f"expected 1 proc named tier_smoke, got {len(procs)}: "
+            f"{[s.name for s in procs]}"
+        )
+        return procs[0]
+
+    @pytest.mark.parametrize("denied", [
+        # Tier 1
+        "if", "foreach", "while", "switch", "catch", "try", "return",
+        # Tier 2
+        "set", "incr", "lappend", "list", "expr", "regexp", "global",
+        "variable", "upvar", "string", "dict", "info", "array", "namespace",
+        "package",
+        # Tier 3
+        "puts", "gets", "read", "open", "close", "update", "vwait",
+        "error", "throw",
+        # Tier 5
+        "source", "auto_load", "auto_import",
+    ])
+    def test_denylisted_command_filtered_from_call_references(
+        self, smoke_symbol, denied
+    ):
+        assert denied not in smoke_symbol.call_references, (
+            f"convention §7.1 Tier-denied command {denied!r} leaked through "
+            f"the filter into call_references: "
+            f"{smoke_symbol.call_references!r}"
+        )
+
+    def test_qualified_static_call_survives_filter(self, smoke_symbol):
+        """A real qualified call must survive the filter — the Tier
+        denylist must not be over-eager."""
+        # Convention §5.2 says qualified names are preserved verbatim;
+        # the call we made was `::my::api::do_work`.  5.2.2 will lock
+        # the verbatim preservation; for now we only assert that a real
+        # static callee survives the filter rather than being incorrectly
+        # filtered as a Tier hit.  The bare-name "do_work" or the
+        # qualified form is acceptable today.
+        survived = (
+            "::my::api::do_work" in smoke_symbol.call_references
+            or "do_work" in smoke_symbol.call_references
+            or "my::api::do_work" in smoke_symbol.call_references
+        )
+        assert survived, (
+            f"qualified static callee was filtered out incorrectly; "
+            f"call_references = {smoke_symbol.call_references!r}"
+        )

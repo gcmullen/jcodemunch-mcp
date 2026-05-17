@@ -29,6 +29,118 @@
 namespace eval ::jcm::bridge {}
 
 # ---------------------------------------------------------------------------
+# P5.2.1 — convention §7.1 Tier 1/2/3/5 denylist.
+#
+# These are commands the convention says are NOT callees: control-flow
+# keywords (Tier 1), value/list manipulation + ensemble dispatchers
+# (Tier 2), I/O / event-loop primitives (Tier 3), and structural / loader
+# commands (Tier 5).  Tier 4 (declarations) produces symbol records, not
+# callees, so it's outside this filter's concern.  §6.9 dispatchers
+# (bind / after / fileevent / trace add) get suppressed by the callback
+# emission rule in 5.2.7, not here.
+#
+# Per convention §5.10 the Tk geometry / window-management ensembles
+# (grid / pack / place / wm / winfo / image / font) are KEPT as
+# architectural callees — they are NOT on this denylist.
+#
+# Lookup is O(1) via the `_tier_deny_set` array; populated once at
+# source-load time (below).
+# ---------------------------------------------------------------------------
+
+namespace eval ::jcm::bridge {
+    variable _tier_deny_set
+    array unset _tier_deny_set
+    array set _tier_deny_set {}
+
+    # Tier 1 — control flow (§7.1)
+    foreach _n {
+        if else elseif while for foreach lmap time
+        switch catch try on trap finally
+        return break continue yield yieldto
+    } { set _tier_deny_set($_n) 1 }
+
+    # Tier 2 — value / list / scope (§7.1).  Note: every documented
+    # ensemble dispatcher (string / dict / info / array / clock / chan /
+    # file / binary / namespace / package / encoding) is on this list
+    # — Tier 2's "ALL subcommands of these documented ensembles" rule
+    # is enforced by simply denying the dispatcher word; when 5.2.5
+    # emits 2-word phrases the dispatcher is the first word and the
+    # phrase still hits the deny set on the dispatcher prefix check
+    # below.  upvar lives here too per §5.13.
+    foreach _n {
+        set incr unset lappend lassign lset lreplace llength
+        lrange lsearch lsort lindex linsert lrepeat lreverse list
+        split join format scan expr regexp regsub subst concat
+        eof seek tell flush global variable upvar
+        string dict info array clock chan file binary namespace
+        package encoding
+    } { set _tier_deny_set($_n) 1 }
+
+    # Tier 3 — I/O / error / event-loop (§7.1)
+    foreach _n {
+        puts gets read open close update vwait error throw
+    } { set _tier_deny_set($_n) 1 }
+
+    # Tier 5 — structural / loader (§7.1).  `package require`,
+    # `package provide`, `source`, `namespace import`, `namespace export`
+    # are caught by the Tier 2 dispatcher (`package` / `namespace`)
+    # or by `source` below.  `inherit` / `superclass` are recorded
+    # via parent_classes and must NOT also surface as callees.
+    foreach _n {
+        source inherit superclass auto_load auto_import tm
+    } { set _tier_deny_set($_n) 1 }
+
+    unset _n
+}
+
+# Return 1 if `name` is on the Tier 1/2/3/5 denylist (post-§5.10 carve-out
+# for kept Tk ensembles).  Accepts both single-word names (`puts`,
+# `string`) and 2-word ensemble phrases (`string length`, `dict set`,
+# `namespace export`) — for the 2-word case the first word's denial
+# implies the phrase is denied too.
+proc ::jcm::bridge::_is_tier_denied {name} {
+    variable _tier_deny_set
+    if {$name eq ""} { return 0 }
+    set first [lindex [split $name " "] 0]
+    return [info exists _tier_deny_set($first)]
+}
+
+# Post-pass: strip Tier 1/2/3/5 denylist hits from every symbol's
+# call_references list and callees list.  Run after the walker has
+# emitted everything; before _maybe_drop_script (which makes elide
+# decisions based on filtered call_references).
+proc ::jcm::bridge::_filter_tier_denylist {} {
+    variable symbols
+    set new [list]
+    foreach sym $symbols {
+        # call_references — flat list of names
+        set keep_calls [list]
+        foreach c [dict get $sym call_references] {
+            if {![_is_tier_denied $c]} {
+                lappend keep_calls $c
+            }
+        }
+        dict set sym call_references $keep_calls
+        # callees — list of dicts; consult the `name` field.  Walker
+        # doesn't populate this yet (5.2.6+ work) but the filter is
+        # ready the day it turns on.
+        if {[dict exists $sym callees]} {
+            set keep_callees [list]
+            foreach entry [dict get $sym callees] {
+                set cname ""
+                if {[dict exists $entry name]} { set cname [dict get $entry name] }
+                if {![_is_tier_denied $cname]} {
+                    lappend keep_callees $entry
+                }
+            }
+            dict set sym callees $keep_callees
+        }
+        lappend new $sym
+    }
+    set symbols $new
+}
+
+# ---------------------------------------------------------------------------
 # File-offset post-resolution pass — replace {__file_offset__ N} tagged
 # tuples (produced by recursion_tables::_handle_inherit /
 # _handle_superclass / _handle_package_require) with concrete 1-based line

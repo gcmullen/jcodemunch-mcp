@@ -1542,6 +1542,14 @@ proc ::jcm::bridge::bridge_main {filepath} {
     # Post-pass D: cross-file class attribution warnings.
     _attribute_out_of_line_bodies
 
+    # Post-pass D2 (P5.2.1): convention §7.1 Tier 1/2/3/5 filter — strip
+    # control-flow / value-manipulation / I/O / structural commands from
+    # call_references + callees so the elide decision in D3 sees the
+    # post-filter signal.  Tk geometry ensembles (grid/pack/wm/winfo/...)
+    # are kept; §6.9 dispatchers (bind/after/fileevent/trace) are
+    # suppressed separately by 5.2.7 (callback emission).
+    _filter_tier_denylist
+
     # Post-pass E: drop __script__ if it has no useful signal — matches the
     # v1 elide policy. Keep it whenever package_requires has content so the
     # Δ0.2 always-present field is queryable.
