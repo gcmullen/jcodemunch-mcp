@@ -124,7 +124,7 @@ The walker (`src/jcodemunch_mcp/parser/tcl/opcode_walker.tcl`) is the single poi
 The TCL-specific fields (`callees: list[dict]`, `args: list[str]`) belong on the **fork axis** — they live in the `jcm_tcl_extensions` side-table (the same machinery P1.3 used for `unresolved_dispatches`, `parent_classes`, `package_requires`). Upstream stays bit-compatible; non-TCL languages never see the new fields.
 
 1. **Backward compat:** old indexes (built before Phase 5) have `JCM_TCL_INDEX_VERSION = 1` in the meta key. Consumers MUST default `callees` / `args` to `[]` on absence; the dataclass field defaults handle in-memory access. The side-table SELECT path needs explicit NULL handling for new columns when reading v1-era rows — covered by a backward-compat read test in §7.6.
-2. **Version bump:** **`JCM_TCL_INDEX_VERSION = 1 → 2`** in `src/jcodemunch_mcp/storage/sqlite_store.py:134`. Per the existing mismatch logic at `sqlite_store.py:1107-1146`, this forces fresh reindex of all TCL-bearing repos — exactly what we want when the side-table shape changes.
+2. **Version bump:** **`JCM_TCL_INDEX_VERSION = 1 → 2`** in `src/jcodemunch_mcp/storage/sqlite_store.py:134`. Per the existing mismatch logic at `sqlite_store.py:1107-1146`, this forces fresh reindex of every fork-built repo — exactly what we want when the side-table shape changes. (Corrected in P5.0: earlier "all TCL-bearing repos" was inaccurate. `_initialize_jcm_tcl_extensions` stamps `jcm_tcl_writer_version` on every `save_index` and every v4→v9 migration regardless of language, so the Strict-A gate is language-agnostic. `tests/test_storage_jcm_tcl_extensions.py::TestVersionBumpPath::test_non_tcl_index_also_refused_after_bump` locks this.)
 3. **Side-table column strategy (REVISED per OMC critic 2026-05-17).** Earlier draft said "mirror the existing `unresolved_dispatches` pattern in the side-table." That was wrong: `unresolved_dispatches` lives on `Symbol` DIRECTLY (`symbols.py:33`), NOT in the side-table. The actual side-table (`jcm_tcl_extensions`) has 3 columns: `parent_classes` (typed), `package_requires` (typed), `extras_json` (escape valve, comment-tagged as "Phase-2 prototype" at `sqlite_store.py:175`).
 
    **Decision: add typed columns** `callees_json TEXT NULL` + `args_json TEXT NULL` to `jcm_tcl_extensions`. Each holds a JSON-encoded list (list-of-dicts isn't a natural SQLite shape, but typed columns keep them out of `extras_json`'s "prototype escape valve" and allow future migrations to introspect/index each independently).
@@ -171,7 +171,7 @@ This is **larger than the Lane-B-agent's 110 LOC estimate** because that estimat
 
 ## 7. Phase 5 work-order proposal
 
-1. **5.0 (gating + B1 fix):** (a) confirm `JCM_TCL_INDEX_VERSION` bump path (`1 → 2`) — NOT the global `INDEX_VERSION` (per §4). Test that old TCL-bearing indexes trigger a fresh reindex on the version mismatch; confirm non-TCL indexes are untouched. (b) **Bundle the B1 spurious-warning bug fix** (per §10) into 5.0 since the same `sqlite_store.py:1107-1146` code path is being touched by the version bump — fixing both at once avoids two passes and removes spurious log noise during 5.3.
+1. **5.0 (gating only — B1 dropped):** confirm `JCM_TCL_INDEX_VERSION` bump path (`1 → 2`) — NOT the global `INDEX_VERSION` (per §4). Tests in `tests/test_storage_jcm_tcl_extensions.py::TestVersionBumpPath` monkeypatch the constant to simulate the post-bump state and lock: (i) a v1-stamped DB is refused, (ii) a freshly saved DB under bumped v2 round-trips, (iii) the gate is language-agnostic (non-TCL DBs are also refused). **Production constant stays at 1**; the actual `1 → 2` bump lands in 5.1 alongside the schema changes that justify it. B1 (spike §10) is closed-not-fixed — see §10 resolution note: warning is not reproducible at HEAD `e89d29c`.
 2. **5.1 (schema):** add `Symbol.callees` + `Symbol.args` fields + `jcm_tcl_extensions` side-table typed columns (`callees_json`, `args_json` per §4) + serialization roundtrip + **backward-compat read test for v1-era indexes** + unit tests.
 3. **5.2 (walker rules, NO class-DSL handling here):** wire `parser/tcl/opcode_walker.tcl` + `parser/tcl/bridge_postpasses.tcl` to emit `callees` per-call-site records (parallel to `call_references`, not replacing it). Specifically:
    - §7.1 Tier 1/2/3/5 filter pass (new pass in `bridge_postpasses.tcl`)
@@ -374,6 +374,21 @@ Index version 10 > current 9 for local/<repo-slug>-<hash>
 **Cleanup:** ~30 min diagnostic + fix. Trace which value `stored_version` is actually reading at line 1108, reconcile with the meta-table contents. Add a regression test that exercises both axes.
 
 **Priority:** **Bundled into Phase 5.0 gating** per OMC critic review 2026-05-17. Same code path (`sqlite_store.py:1107-1146`) is being touched by the `JCM_TCL_INDEX_VERSION 1 → 2` bump in 5.0, so fixing the warning at the same time avoids two passes. ~30 LOC fix included in revised §6 total.
+
+### Resolution (P5.0 — closed, not fixed)
+
+**Date:** 2026-05-17 (Phase 5 entry).
+**Verdict:** the warning is **not reproducible at HEAD `e89d29c`** and there is nothing to fix in code.
+
+**Evidence collected during 5.0 investigation:**
+- Direct SQLite probe of all 18 originally-listed affected DBs (`dcsconfig`, `dcsmsg`, `bl831-dhs-tcl`, `clay`, `BluIceWidgets`, et al.) shows `meta.index_version = '9'` and `meta.jcm_tcl_writer_version = '1'` — both fields are correct.
+- Scripted `SQLiteIndexStore.load_index(owner, name)` across all 39 P4.1 indexes returns `39/39` successfully with **zero warnings** logged.
+- The only warning site is `sqlite_store.py:1109`; the comparison `stored_version (9) > _INDEX_VERSION (9)` is `False`, so the warning correctly never fires.
+- Validation tooling under `validation/bridge_outputs/tools/` does not reference the warning string.
+
+**Likely root cause of the original report:** during a brief P1.2 window, `INDEX_VERSION` was temporarily bumped `9 → 10` (commit `02646c5`) and reverted back to `9` in P1.3 (commit `5133c10`). DBs written during that window would have been stamped `meta.index_version = '10'` and legitimately triggered the warning under post-revert code. The P4.1 reindex on 2026-05-16 wiped `~/.code-index/p4-validation/` and rebuilt every DB under post-revert code, which incidentally cleared the affected DBs without the spike noting that the bug had thereby been resolved.
+
+**Action:** none in 5.0. The B1 bundling clause in §7 step 1 has been dropped accordingly. If the warning ever resurfaces against a real DB, file a new B-numbered bug.
 
 ---
 

@@ -487,3 +487,142 @@ class TestBranchDeltaDoesNotCarryForkExtensionData:
             "if this is intentional, update the deferral docs and unlock the "
             "wiring on save_branch_delta + compose_branch_index together."
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 6: 5.0 — JCM_TCL_INDEX_VERSION bump path coverage
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestVersionBumpPath:
+    """Phase 5.0 — lock the JCM_TCL_INDEX_VERSION 1→2 bump path.
+
+    Production constant stays at 1 until 5.1; these tests monkeypatch the
+    module-level constant to simulate the post-bump state. They prove:
+
+    1. A v1-stamped DB is refused once the constant is bumped (forced reindex).
+    2. A DB freshly written under the bumped constant stamps v2 and loads.
+    3. The strict-load gate applies to ALL fork-built indexes, not just
+       TCL-bearing ones — correcting an inaccurate claim in
+       PHASE5_BRIDGE_ENRICHMENT_SPIKE.md §4. Bumping JCM_TCL_INDEX_VERSION
+       forces a reindex of every repo the fork has indexed.
+    """
+
+    def test_v1_stamped_db_refused_after_simulated_bump_to_v2(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        sym = _make_class_symbol(parent_classes=[{"name": "Base", "line": 3}])
+        store = _save_repo(tmp_path, [sym])
+
+        sqlite_store = SQLiteIndexStore(base_path=str(tmp_path))
+        db_path = sqlite_store._db_path("local", "testrepo")
+        with sqlite3.connect(str(db_path)) as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key='jcm_tcl_writer_version'"
+            ).fetchone()
+            assert row is not None and int(row[0]) == 1, (
+                "precondition: save_index must stamp the current constant "
+                "(1) before the simulated bump"
+            )
+
+        monkeypatch.setattr(
+            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION", 2
+        )
+        from jcodemunch_mcp.storage.sqlite_store import _cache_clear
+        _cache_clear()
+
+        import logging
+        with caplog.at_level(logging.WARNING):
+            loaded = store.load_index("local", "testrepo")
+
+        assert loaded is None, (
+            "after bumping JCM_TCL_INDEX_VERSION 1→2, a v1-stamped DB must "
+            "be refused (forces fresh reindex)"
+        )
+        msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("jcm_tcl_writer_version" in m for m in msgs), (
+            f"expected a warning naming jcm_tcl_writer_version; got {msgs!r}"
+        )
+
+    def test_freshly_written_db_under_bumped_v2_loads(
+        self, tmp_path, monkeypatch
+    ):
+        """Post-bump save_index stamps v2 and round-trips cleanly."""
+        monkeypatch.setattr(
+            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION", 2
+        )
+        sym = _make_class_symbol(parent_classes=[{"name": "Base", "line": 3}])
+        store = _save_repo(tmp_path, [sym])
+
+        sqlite_store = SQLiteIndexStore(base_path=str(tmp_path))
+        db_path = sqlite_store._db_path("local", "testrepo")
+        with sqlite3.connect(str(db_path)) as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key='jcm_tcl_writer_version'"
+            ).fetchone()
+            assert row is not None and int(row[0]) == 2, (
+                "save_index under bumped constant must stamp v2"
+            )
+
+        from jcodemunch_mcp.storage.sqlite_store import _cache_clear
+        _cache_clear()
+
+        loaded = store.load_index("local", "testrepo")
+        assert loaded is not None, (
+            "happy path: stamp == bumped constant must load successfully"
+        )
+        loaded_sym = loaded.get_symbol(sym.id)
+        assert loaded_sym is not None
+        assert loaded_sym.get("parent_classes") == [{"name": "Base", "line": 3}]
+
+    def test_non_tcl_index_also_refused_after_bump(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """The Strict-A gate refuses ALL fork-built DBs whose stamp doesn't
+        match — not just TCL-bearing ones.
+
+        Documents/locks the actual contract; PHASE5_BRIDGE_ENRICHMENT_SPIKE.md
+        §4's "non-TCL indexes are untouched" claim is inaccurate. Every
+        save_index path stamps jcm_tcl_writer_version, so bumping the
+        constant forces reindex of every fork-built repo regardless of
+        language.
+        """
+        py_sym = Symbol(
+            id="src/foo.py::main#function",
+            file="src/foo.py",
+            name="main",
+            qualified_name="main",
+            kind="function",
+            language="python",
+            signature="def main():",
+        )
+        store = IndexStore(base_path=str(tmp_path))
+        store.save_index(
+            owner="local",
+            name="pyrepo",
+            source_files=["src/foo.py"],
+            symbols=[py_sym],
+            raw_files={"src/foo.py": "def main(): pass\n"},
+            languages={"python": 1},
+            file_languages={"src/foo.py": "python"},
+            source_root=str(tmp_path),
+        )
+
+        monkeypatch.setattr(
+            "jcodemunch_mcp.storage.sqlite_store.JCM_TCL_INDEX_VERSION", 2
+        )
+        from jcodemunch_mcp.storage.sqlite_store import _cache_clear
+        _cache_clear()
+
+        import logging
+        with caplog.at_level(logging.WARNING):
+            loaded = store.load_index("local", "pyrepo")
+
+        assert loaded is None, (
+            "non-TCL DB refused after bump: Strict-A gate is language-agnostic. "
+            "If this assertion ever fails, the gate's scope was tightened to "
+            "TCL-only — update PHASE5_BRIDGE_ENRICHMENT_SPIKE.md §4 to match."
+        )
+        msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("jcm_tcl_writer_version" in m for m in msgs), (
+            f"expected a warning naming jcm_tcl_writer_version; got {msgs!r}"
+        )
