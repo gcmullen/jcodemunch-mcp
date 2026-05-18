@@ -1,9 +1,10 @@
-"""Tests for Phase 5.2a.0 DSL walker skeleton.
+"""Tests for Phase 5.2a.2 generic DSL walker.
 
-Validates that the new dsl_annotations.tcl + dsl_walker.tcl files load
-cleanly into the bridge and that the empty ANNOTATIONS table is a
-true no-op vs the HEAD snapshot (commit 582fbec). 5.2a.1+ tests will
-exercise the actual annotation rows.
+Validates that the rewritten dsl_annotations.tcl + dsl_walker.tcl files load
+cleanly into the bridge and that the new fully-populated ANNOTATIONS table
+produces stable output. The 5.2a.0 snapshot (commit 582fbec baseline with
+empty ANNOTATIONS) is kept as historical record; the active byte-equality
+test now uses the 5_2a_full snapshot captured after the generic engine rewrite.
 """
 
 import json
@@ -24,7 +25,7 @@ DSL_ANNOTATIONS = (
     REPO_ROOT / "src" / "jcodemunch_mcp" / "parser" / "tcl" / "dsl_annotations.tcl"
 )
 CANARY = REPO_ROOT / "tests" / "fixtures" / "tcl" / "canary.tcl"
-SNAPSHOT = REPO_ROOT / "tests" / "fixtures" / "tcl" / "canary_bridge_output_5_2a_0.json"
+SNAPSHOT = REPO_ROOT / "tests" / "fixtures" / "tcl" / "canary_bridge_output_5_2a_full.json"
 
 
 def test_skeleton_files_load():
@@ -45,14 +46,11 @@ def test_skeleton_files_load():
     assert isinstance(parsed, list) and len(parsed) > 0
 
 
-def test_empty_annotations_is_noop_byte_equal():
-    """Empty ANNOTATIONS table => bridge output bit-identical vs HEAD snapshot.
+def test_canary_snapshot_5_2a_full():
+    """Bridge output is byte-equal vs the 5_2a_full snapshot.
 
-    The snapshot was captured at commit 582fbec (Phase 5.2 close) by running
-    `tclsh disasm_bridge.tcl tests/fixtures/tcl/canary.tcl`. With the 5.2a.0
-    DSL pre-pass wired in but ANNOTATIONS empty, the pre-pass must return 0
-    on every command and the output must match the pre-skeleton bytes
-    exactly.
+    Captured after the generic engine rewrite (Phase 5.2a.2) with the full
+    25-row ANNOTATIONS table and 6-grammar BODY_GRAMMARS active.
     """
     result = subprocess.run(
         ["tclsh", str(BRIDGE), str(CANARY)],
@@ -63,17 +61,20 @@ def test_empty_annotations_is_noop_byte_equal():
     assert result.returncode == 0
     expected = SNAPSHOT.read_text(encoding="utf-8")
     assert result.stdout == expected, (
-        "5.2a.0 pre-pass perturbed bridge output vs HEAD snapshot. "
-        "The DSL walker must be a no-op with empty ANNOTATIONS."
+        "Bridge output changed vs 5_2a_full snapshot. "
+        "If intentional, re-capture with: "
+        "tclsh disasm_bridge.tcl canary.tcl > canary_bridge_output_5_2a_full.json"
     )
 
 
-def test_dsl_lookup_empty_table_returns_empty():
-    """::jcm::dsl::lookup returns {} when ANNOTATIONS is empty (5.2a.0)."""
+def test_dsl_lookup_basic():
+    """::jcm::dsl::lookup returns a row for snit::type and empty for unknown."""
     script = f"""
 source [list {DSL_ANNOTATIONS}]
-set r [::jcm::dsl::lookup foo bar]
-if {{[llength $r] == 0}} {{ puts EMPTY }} else {{ puts NONEMPTY }}
+set r [::jcm::dsl::lookup {{snit::type}} {{}}]
+if {{[llength $r] > 0}} {{ puts FOUND }} else {{ puts NOTFOUND }}
+set r2 [::jcm::dsl::lookup {{no_such_dsl}} {{}}]
+if {{[llength $r2] == 0}} {{ puts EMPTY }} else {{ puts NONEMPTY }}
 """
     result = subprocess.run(
         ["tclsh"],
@@ -83,6 +84,7 @@ if {{[llength $r] == 0}} {{ puts EMPTY }} else {{ puts NONEMPTY }}
         timeout=10,
     )
     assert result.returncode == 0, f"tclsh failed: {result.stderr!r}"
-    assert result.stdout.strip() == "EMPTY", (
-        f"expected EMPTY, got stdout={result.stdout!r} stderr={result.stderr!r}"
+    lines = result.stdout.strip().splitlines()
+    assert lines == ["FOUND", "EMPTY"], (
+        f"unexpected output: stdout={result.stdout!r} stderr={result.stderr!r}"
     )

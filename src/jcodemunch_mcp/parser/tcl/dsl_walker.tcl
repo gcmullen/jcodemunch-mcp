@@ -1,25 +1,15 @@
-# dsl_walker.tcl — Phase 5.2a generic class-DSL walker.
+# dsl_walker.tcl — Phase 5.2a.2 truly-generic class-DSL walker.
 #
-# Sits as a sibling to recursion_tables.tcl's SUBTABLE_A/B/C dispatch.
-# Called from disasm_bridge::_handle_pattern_a as a pre-pass: when the
-# command's first word (optionally + second word) matches a row in
-# ::jcm::dsl::ANNOTATIONS, this walker takes over symbol emission + body
-# recursion using the bridge's existing emit helpers. When no row matches,
-# returns 0 so the caller falls through to the existing SUBTABLE_C / A
-# dispatch — preserving all behavior for non-DSL commands.
+# Driven entirely by ::jcm::dsl::ANNOTATIONS + ::jcm::dsl::BODY_GRAMMARS.
+# Zero per-DSL handler procs. Adding a new DSL requires only annotation rows
+# + a grammar entry in BODY_GRAMMARS — no walker code changes.
 #
-# Context tracking: BODY_GRAMMAR_STACK records which DSL body we're
-# currently walking. The pre-pass consults the stack-top body grammar
-# BEFORE the top-level outer-commands table, so directives like
-# `typemethod` / `option` / `delegate method` only get DSL-aware treatment
-# when they appear inside a known DSL body. Outside a DSL body those same
-# words fall through to the bridge's normal dispatch.
+# Context tracking: BODY_GRAMMAR_STACK records which DSL body we're currently
+# walking. The pre-pass checks the stack-top grammar BEFORE the outer-command
+# table, so directives only get DSL-aware treatment inside a known DSL body.
 
 namespace eval ::jcm::dsl::walker {
-    # Stack of body-grammar keys (e.g. "snit"). Top = active grammar.
-    # Pushed by _apply_outer_row before recursing into the DSL body; popped
-    # after. Snit / Clay / iTcl don't nest in real code, but the stack
-    # discipline keeps the design correct if they ever do.
+    # Stack of body-grammar keys (e.g. "snit", "itcl"). Top = active grammar.
     variable BODY_GRAMMAR_STACK {}
 }
 
@@ -32,233 +22,203 @@ proc ::jcm::dsl::walker::try_dispatch {ev cmd_text abs_start abs_end parent_sym_
     variable BODY_GRAMMAR_STACK
     set first  [::jcm::bridge::_first_word_of_cmd $cmd_text]
     set second [::jcm::bridge::_nth_word_of_cmd  $cmd_text 1]
-
-    # 1) Inside a DSL body? Check the active grammar's directive table.
+    # 1) Inside a DSL body? Look up first_word in the stack-top grammar.
     if {[llength $BODY_GRAMMAR_STACK] > 0} {
         set grammar_key [lindex $BODY_GRAMMAR_STACK end]
-        variable ::jcm::dsl::BODY_GRAMMARS
         if {[dict exists $::jcm::dsl::BODY_GRAMMARS $grammar_key $first]} {
-            set rule [dict get $::jcm::dsl::BODY_GRAMMARS $grammar_key $first]
-            return [_apply_body_rule $rule $cmd_text $abs_start $abs_end \
+            set action_spec [dict get $::jcm::dsl::BODY_GRAMMARS $grammar_key $first]
+            return [_emit_directive $action_spec $cmd_text $abs_start $abs_end \
                     $parent_sym_idx $parent_qname]
         }
-        # Directive not in DSL grammar — fall through to top-level + SUBTABLE_*.
+        # Directive not in grammar — fall through to outer table + SUBTABLE_*.
     }
 
-    # 2) Top-level outers (snit::type, ::snit::type, ...).
+    # 2) Top-level outer commands (snit::type, itcl::class, proc class, ...).
     set row [::jcm::dsl::lookup $first $second]
     if {[llength $row] == 0} { return 0 }
     return [_apply_outer_row $row $cmd_text $abs_start $abs_end \
             $parent_sym_idx $parent_qname]
 }
 
-# Emit the DSL outer symbol (typically a class), then recurse into its
-# body with the row's body_grammar pushed onto BODY_GRAMMAR_STACK so
-# directive-aware dispatch fires inside.
+# Apply one ANNOTATIONS row. Handles synth / augment / slot actions, then
+# recurses each body word in body_indices with grammar pushed on the stack.
 proc ::jcm::dsl::walker::_apply_outer_row {row cmd_text abs_start abs_end parent_sym_idx parent_qname} {
     variable BODY_GRAMMAR_STACK
-    lassign $row first second name_idx body_idx kind body_grammar
+    lassign $row first second action kind grammar name_idx body_indices
 
     set sym_name [::jcm::bridge::_nth_word_of_cmd $cmd_text $name_idx]
     if {$sym_name eq ""} { return 0 }
 
     set new_sym_idx -1
     set new_qname $parent_qname
-    if {$kind ne ""} {
-        set qname [::jcm::bridge::_qualify $sym_name $parent_qname]
-        set sig [::jcm::bridge::_build_signature $cmd_text $first $sym_name $kind]
-        set keywords [::jcm::bridge::_keywords_for_kind $kind {}]
-        set sym [::jcm::bridge::_make_symbol \
-            name           $sym_name \
-            qualified_name $qname \
-            kind           $kind \
-            signature      $sig \
-            parent         $parent_qname \
-            keywords       $keywords]
-        set sym [::jcm::bridge::_attach_offsets $sym $abs_start $abs_end]
-        set new_sym_idx [::jcm::bridge::_append_symbol $sym]
-        set new_qname $qname
-    }
 
-    # Extract the body word.
-    set total_words [::jcm::bridge::_count_cmd_words $cmd_text]
-    set resolved_idx [::jcm::disasm::rectbl::resolve_body_idx $body_idx $total_words]
-    set extracted [::jcm::disasm::body::extract_from_event $cmd_text $resolved_idx $abs_start]
-
-    # Dynamic body — tag and skip recursion (mirrors _apply_a_row's
-    # treatment in disasm_bridge.tcl).
-    if {[dict get $extracted dynamic]} {
-        if {$new_sym_idx >= 0} {
-            namespace upvar ::jcm::bridge symbols symbols file_path file_path
-            set sym [lindex $symbols $new_sym_idx]
-            set entry [dict create kind dynamic_body \
-                line [dict get $sym line] \
-                file $file_path]
-            set sym [::jcm::disasm::unresolved::append_to_sym $sym $entry]
-            lset symbols $new_sym_idx $sym
+    switch -- $action {
+        synth {
+            set qname [::jcm::bridge::_qualify $sym_name $parent_qname]
+            set sig "$first $sym_name"
+            set keywords [::jcm::bridge::_keywords_for_kind $kind {}]
+            set sym [::jcm::bridge::_make_symbol \
+                name $sym_name qualified_name $qname kind $kind \
+                signature $sig parent $parent_qname keywords $keywords]
+            set sym [::jcm::bridge::_attach_offsets $sym $abs_start $abs_end]
+            set new_sym_idx [::jcm::bridge::_append_symbol $sym]
+            set new_qname $qname
         }
-        return 1
+        augment {
+            # Find the existing class symbol by qname. Gold-first: if not
+            # found, skip body recursion entirely — no wrong-scope attribution.
+            set qname [::jcm::bridge::_qualify $sym_name $parent_qname]
+            set found_idx [_find_class_by_qname $qname]
+            if {$found_idx < 0} {
+                set found_idx [_find_class_by_qname $sym_name]
+            }
+            if {$found_idx < 0} {
+                return 1
+            }
+            namespace upvar ::jcm::bridge symbols symbols
+            set new_sym_idx $found_idx
+            set new_qname [dict get [lindex $symbols $found_idx] qualified_name]
+        }
+        slot {
+            # Component slot — no symbol; recurse with parent context.
+        }
     }
-    if {![dict get $extracted ok]} { return 1 }
 
-    # Recurse into the body with the DSL's grammar active.
     set recur_parent_idx $parent_sym_idx
     set recur_parent_qname $parent_qname
     if {$new_sym_idx >= 0} {
         set recur_parent_idx $new_sym_idx
         set recur_parent_qname $new_qname
     }
-    lappend BODY_GRAMMAR_STACK $body_grammar
-    if {[catch {
-        ::jcm::bridge::walk_recursive [dict get $extracted body_src] \
-            [dict get $extracted body_offset] $recur_parent_idx $recur_parent_qname
-    } err opts]} {
-        # Always pop the stack even if recursion blew up.
-        set BODY_GRAMMAR_STACK [lrange $BODY_GRAMMAR_STACK 0 end-1]
-        return -options $opts $err
+
+    set total_words [::jcm::bridge::_count_cmd_words $cmd_text]
+    foreach body_idx $body_indices {
+        set resolved_idx [::jcm::disasm::rectbl::resolve_body_idx $body_idx $total_words]
+        if {![_body_is_brace_literal $cmd_text $resolved_idx]} continue
+        set extracted [::jcm::disasm::body::extract_from_event \
+            $cmd_text $resolved_idx $abs_start]
+        if {[dict get $extracted dynamic]} continue
+        if {![dict get $extracted ok]} continue
+        if {$grammar ne ""} {
+            lappend BODY_GRAMMAR_STACK $grammar
+        }
+        if {[catch {
+            ::jcm::bridge::walk_recursive [dict get $extracted body_src] \
+                [dict get $extracted body_offset] $recur_parent_idx $recur_parent_qname
+        } err opts]} {
+            if {$grammar ne ""} {
+                set BODY_GRAMMAR_STACK [lrange $BODY_GRAMMAR_STACK 0 end-1]
+            }
+            return -options $opts $err
+        }
+        if {$grammar ne ""} {
+            set BODY_GRAMMAR_STACK [lrange $BODY_GRAMMAR_STACK 0 end-1]
+        }
     }
-    set BODY_GRAMMAR_STACK [lrange $BODY_GRAMMAR_STACK 0 end-1]
 
     return 1
 }
 
-# Apply a body-grammar rule for one directive inside a DSL body. Returns
-# 1 (handled) or 0 (fall through — used when a "rule" actually wants the
-# default dispatch to run, currently unused).
-proc ::jcm::dsl::walker::_apply_body_rule {rule cmd_text abs_start abs_end parent_sym_idx parent_qname} {
-    set emit [dict get $rule emit]
-    switch -- $emit {
+# Dispatch one body-grammar action_spec for a directive inside a DSL body.
+proc ::jcm::dsl::walker::_emit_directive {action_spec cmd_text abs_start abs_end parent_sym_idx parent_qname} {
+    # Check optional conditional before anything else.
+    if {[dict exists $action_spec conditional]} {
+        set cond [dict get $action_spec conditional]
+        if {[dict exists $cond second_word_must_be]} {
+            set required [dict get $cond second_word_must_be]
+            set actual   [::jcm::bridge::_nth_word_of_cmd $cmd_text 1]
+            if {$actual ne $required} {
+                return 1  ;# conditional failed — suppress
+            }
+        }
+    }
+
+    set action [dict get $action_spec action]
+    switch -- $action {
         suppress {
-            # Slot / data declaration — consume the directive; emit nothing.
             return 1
         }
-        class_method {
-            return [_emit_class_method $rule $cmd_text $abs_start $abs_end \
-                    $parent_sym_idx $parent_qname]
-        }
-        ctor {
-            return [_emit_ctor_or_dtor $rule constructor $cmd_text \
-                    $abs_start $abs_end $parent_sym_idx $parent_qname]
-        }
-        dtor {
-            return [_emit_ctor_or_dtor $rule destructor $cmd_text \
-                    $abs_start $abs_end $parent_sym_idx $parent_qname]
-        }
-        delegate_dispatch {
-            return [_emit_delegate $cmd_text $abs_start $abs_end \
-                    $parent_sym_idx $parent_qname]
-        }
         parent_classes {
-            return [_append_parent_classes $cmd_text $abs_start $parent_sym_idx]
+            return [_handle_parent_classes $action_spec $cmd_text $abs_start $parent_sym_idx]
+        }
+        emit -
+        emit_no_recurse {
+            # Resolve NAME from name_source.
+            set name_source [dict get $action_spec name_source]
+            set name_kind   [lindex $name_source 0]
+            if {$name_kind eq "idx"} {
+                set sym_name [::jcm::bridge::_nth_word_of_cmd $cmd_text [lindex $name_source 1]]
+            } elseif {$name_kind eq "literal"} {
+                set sym_name [lindex $name_source 1]
+            } else {
+                return 0
+            }
+            if {$sym_name eq ""} { return 1 }
+
+            set kind     [dict get $action_spec kind]
+            set qname    [::jcm::bridge::_qualify $sym_name $parent_qname]
+            set keywords [dict get $action_spec keywords]
+            set first_word [::jcm::bridge::_first_word_of_cmd $cmd_text]
+            set sig "$first_word $sym_name"
+
+            set sym_args [list \
+                name $sym_name qualified_name $qname kind $kind \
+                signature $sig parent $parent_qname keywords $keywords]
+
+            if {[dict exists $action_spec note_template]} {
+                set note [_substitute_template \
+                    [dict get $action_spec note_template] $cmd_text]
+                # Append note to signature — the standard convention.
+                lappend sym_args signature "$sig — $note"
+            }
+
+            set sym [::jcm::bridge::_make_symbol {*}$sym_args]
+            set sym [::jcm::bridge::_attach_offsets $sym $abs_start $abs_end]
+            set new_sym_idx [::jcm::bridge::_append_symbol $sym]
+
+            # Recurse body for `emit` only.
+            if {$action eq "emit" && [dict exists $action_spec body_idx]} {
+                set body_idx   [dict get $action_spec body_idx]
+                set total_words [::jcm::bridge::_count_cmd_words $cmd_text]
+                set resolved_idx [::jcm::disasm::rectbl::resolve_body_idx \
+                    $body_idx $total_words]
+                if {![::jcm::dsl::walker::_body_is_brace_literal $cmd_text $resolved_idx]} {
+                    return 1
+                }
+                set extracted [::jcm::disasm::body::extract_from_event \
+                    $cmd_text $resolved_idx $abs_start]
+                if {[dict get $extracted ok] && ![dict get $extracted dynamic]} {
+                    set body_src [dict get $extracted body_src]
+                    ::jcm::bridge::walk_recursive $body_src \
+                        [dict get $extracted body_offset] $new_sym_idx $qname
+                    # Attach param_count / cyclomatic / nesting. Pass a synthetic
+                    # SUBTABLE_A-shaped row so _extract_args_for_row can resolve
+                    # the args word by first-word (constructor/destructor/method).
+                    set metric_row [list $first_word "" $resolved_idx lambda $kind {}]
+                    ::jcm::bridge::_attach_metrics $new_sym_idx $cmd_text $body_src $metric_row
+                }
+            }
+            return 1
         }
     }
     return 0
 }
 
-# typemethod / proc inside a snit body -> class_method symbol; recurse body
-# for inner callees attributed to the new method symbol.
-proc ::jcm::dsl::walker::_emit_class_method {rule cmd_text abs_start abs_end parent_sym_idx parent_qname} {
-    set name_idx [dict get $rule name_idx]
-    set body_idx [dict get $rule body_idx]
-    set sym_name [::jcm::bridge::_nth_word_of_cmd $cmd_text $name_idx]
-    if {$sym_name eq ""} { return 1 }
-
-    set qname [::jcm::bridge::_qualify $sym_name $parent_qname]
-    set sig "[::jcm::bridge::_first_word_of_cmd $cmd_text] $sym_name"
-    set sym [::jcm::bridge::_make_symbol \
-        name           $sym_name \
-        qualified_name $qname \
-        kind           class_method \
-        signature      $sig \
-        parent         $parent_qname \
-        keywords       [list class_method]]
-    set sym [::jcm::bridge::_attach_offsets $sym $abs_start $abs_end]
-    set new_sym_idx [::jcm::bridge::_append_symbol $sym]
-
-    set total_words [::jcm::bridge::_count_cmd_words $cmd_text]
-    set resolved_idx [::jcm::disasm::rectbl::resolve_body_idx $body_idx $total_words]
-    set extracted [::jcm::disasm::body::extract_from_event $cmd_text $resolved_idx $abs_start]
-    if {![dict get $extracted ok]} { return 1 }
-    if {[dict get $extracted dynamic]} { return 1 }
-
-    # Recurse into the method body without pushing onto the DSL stack —
-    # method bodies are plain Tcl, not nested DSL bodies.
-    ::jcm::bridge::walk_recursive [dict get $extracted body_src] \
-        [dict get $extracted body_offset] $new_sym_idx $qname
-    return 1
-}
-
-# constructor / destructor inside a DSL body where gold expects
-# kind=constructor (not kind=method which is the bridge's broader wire
-# convention from _apply_a_row). Scoped to DSL contexts to avoid changing
-# the iTcl/TclOO emission shape; gold-first audit may later expand this.
-proc ::jcm::dsl::walker::_emit_ctor_or_dtor {rule kind cmd_text abs_start abs_end parent_sym_idx parent_qname} {
-    set body_idx [dict get $rule body_idx]
-    set qname [::jcm::bridge::_qualify $kind $parent_qname]
-    set sig $kind
-    if {$kind eq "constructor"} {
-        set args [::jcm::bridge::_nth_word_of_cmd $cmd_text 1]
-        set sig "constructor \{$args\}"
-    }
-    set sym [::jcm::bridge::_make_symbol \
-        name           $kind \
-        qualified_name $qname \
-        kind           $kind \
-        signature      $sig \
-        parent         $parent_qname \
-        keywords       [list $kind]]
-    set sym [::jcm::bridge::_attach_offsets $sym $abs_start $abs_end]
-    set new_sym_idx [::jcm::bridge::_append_symbol $sym]
-
-    set total_words [::jcm::bridge::_count_cmd_words $cmd_text]
-    set resolved_idx [::jcm::disasm::rectbl::resolve_body_idx $body_idx $total_words]
-    set extracted [::jcm::disasm::body::extract_from_event $cmd_text $resolved_idx $abs_start]
-    if {[dict get $extracted ok] && ![dict get $extracted dynamic]} {
-        ::jcm::bridge::walk_recursive [dict get $extracted body_src] \
-            [dict get $extracted body_offset] $new_sym_idx $qname
-    }
-    return 1
-}
-
-# `delegate method NAME to COMPONENT` -> emit a method symbol with empty
-# body and note "delegate to <component>", per convention §5.4.7 (analogous
-# to TclOO `forward`). `delegate option ...` is suppressed (slot only).
-proc ::jcm::dsl::walker::_emit_delegate {cmd_text abs_start abs_end parent_sym_idx parent_qname} {
-    set kind_word [::jcm::bridge::_nth_word_of_cmd $cmd_text 1]
-    if {$kind_word ne "method"} { return 1 }
-    set sym_name [::jcm::bridge::_nth_word_of_cmd $cmd_text 2]
-    if {$sym_name eq ""} { return 1 }
-    set component [::jcm::bridge::_nth_word_of_cmd $cmd_text 4]
-
-    set qname [::jcm::bridge::_qualify $sym_name $parent_qname]
-    set sig "delegate method $sym_name to $component"
-    set sym [::jcm::bridge::_make_symbol \
-        name           $sym_name \
-        qualified_name $qname \
-        kind           method \
-        signature      $sig \
-        parent         $parent_qname \
-        keywords       [list method delegate]]
-    set sym [::jcm::bridge::_attach_offsets $sym $abs_start $abs_end]
-    ::jcm::bridge::_append_symbol $sym
-    return 1
-}
-
-# `superclass CLASS ?CLASS...?` -> append each class to the enclosing
-# DSL class symbol's parent_classes field. NOT a callee. Entry shape
-# {name STRING line INT} per recursion_tables::_handle_superclass.
-proc ::jcm::dsl::walker::_append_parent_classes {cmd_text abs_start parent_sym_idx} {
+# Append parent-class names from the command words to the enclosing class
+# symbol's parent_classes field.
+proc ::jcm::dsl::walker::_handle_parent_classes {action_spec cmd_text abs_start parent_sym_idx} {
     if {$parent_sym_idx < 0} { return 1 }
+    set start_idx [dict get $action_spec start_idx]
     set total [::jcm::bridge::_count_cmd_words $cmd_text]
-    if {$total < 2} { return 1 }
+    if {$total <= $start_idx} { return 1 }
     namespace upvar ::jcm::bridge symbols symbols line_offsets line_offsets
     set sym [lindex $symbols $parent_sym_idx]
     if {![dict exists $sym parent_classes]} {
         dict set sym parent_classes [list]
     }
-    set pc [dict get $sym parent_classes]
+    set pc   [dict get $sym parent_classes]
     set line [::jcm::bridge::char_offset_to_line $line_offsets $abs_start]
-    for {set i 1} {$i < $total} {incr i} {
+    for {set i $start_idx} {$i < $total} {incr i} {
         set c [::jcm::bridge::_nth_word_of_cmd $cmd_text $i]
         if {$c ne ""} {
             lappend pc [dict create name $c line $line]
@@ -267,4 +227,38 @@ proc ::jcm::dsl::walker::_append_parent_classes {cmd_text abs_start parent_sym_i
     dict set sym parent_classes $pc
     lset symbols $parent_sym_idx $sym
     return 1
+}
+
+# Returns 1 if the body word at $resolved_idx in $cmd_text starts with '{',
+# i.e. it's a real code-body brace literal and NOT a quoted-string default
+# value. Mirrors the SUBTABLE_A guard at _apply_a_row lines 1080-1086 so
+# DSL annotation rows can safely declare optional trailing bodies without
+# walking string defaults as code (the `::dcss` regression).
+proc ::jcm::dsl::walker::_body_is_brace_literal {cmd_text resolved_idx} {
+    set start [::jcm::disasm::body::find_word_start $cmd_text $resolved_idx]
+    if {$start < 0} { return 0 }
+    return [expr {[string index $cmd_text $start] eq "\{"}]
+}
+
+# Scan symbols for a class with the given qualified_name.
+proc ::jcm::dsl::walker::_find_class_by_qname {qname} {
+    namespace upvar ::jcm::bridge symbols symbols
+    set n [llength $symbols]
+    for {set i 0} {$i < $n} {incr i} {
+        set s [lindex $symbols $i]
+        if {[dict get $s kind] eq "class" && [dict get $s qualified_name] eq $qname} {
+            return $i
+        }
+    }
+    return -1
+}
+
+# Replace ${cmd_word_N} tokens in tmpl with the Nth word of cmd_text.
+proc ::jcm::dsl::walker::_substitute_template {tmpl cmd_text} {
+    set result $tmpl
+    while {[regexp {\$\{cmd_word_([0-9]+)\}} $result -> idx]} {
+        set word [::jcm::bridge::_nth_word_of_cmd $cmd_text $idx]
+        regsub {\$\{cmd_word_[0-9]+\}} $result $word result
+    }
+    return $result
 }
