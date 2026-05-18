@@ -2366,3 +2366,125 @@ class TestMethodDispatchEmission:
                 f"call_references method {method!r} count != 1: "
                 f"{target.call_references!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.7 — convention §6.9 / §6.12 callback emission
+#
+# bind / after / fileevent / `trace add ...` are §6.9 script-accepting
+# dispatchers.  Convention rules:
+#
+#   1. The dispatcher itself is NOT a callee (suppressed).
+#   2. The SCRIPT argument's first method word is recorded as kind=callback
+#      on the enclosing symbol.
+#   3. Three §6.12 script shapes are recognized:
+#      - "$this method args"     (strcat / quoted string)
+#      - [list $this method args]
+#      - {method args}           (brace-literal callback prefix)
+#
+# Per BRIDGE_VS_GOLD_VALIDATION §3 + §4b + §6 bug #3 this closes ~80
+# callback misses (register / cb / unregister / etc.) and ~30 dispatcher
+# extras (bind / after / fileevent / trace).
+# ---------------------------------------------------------------------------
+
+
+CALLBACK_FIXTURE = '''\
+proc test_callbacks {w obj cb} {
+    bind $w <Configure> "$obj handleConfigure"
+    bind $w <Destroy> [list $obj handleDestroy]
+    bind $w <FocusIn> $cb
+    after 1000 {my_periodic_task arg1}
+    after idle "$obj refresh"
+    fileevent $w readable "$obj on_readable"
+    trace add variable ::g write [list $obj on_change]
+    return 1
+}
+'''
+
+
+class TestCallbackEmission:
+    @pytest.fixture
+    def target(self):
+        symbols = parse_file(CALLBACK_FIXTURE, "cb.tcl", "tcl")
+        return next(s for s in symbols if s.name == "test_callbacks")
+
+    @pytest.mark.parametrize("dispatcher", [
+        "bind", "after", "fileevent", "trace",
+    ])
+    def test_dispatcher_suppressed_from_call_references(
+        self, target, dispatcher
+    ):
+        """§6.9 dispatchers are never callees."""
+        assert dispatcher not in target.call_references, (
+            f"§6.9 dispatcher {dispatcher!r} leaked into call_references: "
+            f"{target.call_references!r}"
+        )
+
+    @pytest.mark.parametrize("method,shape,dispatcher", [
+        # Strcat (quoted-string) shape
+        ("handleConfigure", '"$obj handleConfigure"', "bind"),
+        ("refresh", '"$obj refresh"', "after"),
+        ("on_readable", '"$obj on_readable"', "fileevent"),
+        # Bracket-list shape
+        ("handleDestroy", "[list $obj handleDestroy]", "bind"),
+        ("on_change", "[list $obj on_change]", "trace"),
+        # Brace-literal shape
+        ("my_periodic_task", "{my_periodic_task arg1}", "after"),
+    ])
+    def test_callback_extracted_for_script_shape(
+        self, target, method, shape, dispatcher
+    ):
+        cb_records = [
+            c for c in target.callees
+            if c.get("kind") == "callback" and c.get("name") == method
+        ]
+        assert len(cb_records) == 1, (
+            f"expected exactly 1 callback record for {method!r} "
+            f"(shape {shape}, dispatcher {dispatcher}); got {cb_records!r}"
+        )
+        assert cb_records[0]["note"] == dispatcher, (
+            f"callback note should be the dispatcher head; got "
+            f"{cb_records[0]['note']!r}"
+        )
+
+    def test_variable_bound_callback_not_extracted(self, target):
+        """`bind $w <FocusIn> $cb` is a variable-bound callback (§5.14
+        callback_var) — no static method recoverable, no callback
+        record."""
+        cb_records = [c for c in target.callees if c.get("kind") == "callback"]
+        cb_names = [c["name"] for c in cb_records]
+        # Confirm no spurious callback record was added for the $cb case
+        # (e.g. by extracting "$cb" or "cb" as a method name).
+        assert "$cb" not in cb_names
+        # `cb` would only appear if the helper incorrectly stripped the $
+        # prefix; assert specifically that no callback at the $cb line was
+        # synthesized.
+        # (The fixture's $cb call is at line 4 — relative to the proc body
+        # which starts at line 1, so abs line 4.)
+        line4_records = [c for c in cb_records if c.get("line") == 4]
+        assert not line4_records, (
+            f"variable-bound callback at line 4 should not produce a "
+            f"callback record; got {line4_records!r}"
+        )
+
+    def test_all_six_known_shapes_extract(self, target):
+        """The 6 statically-resolvable callback sites in the fixture all
+        surface as kind=callback records (one variable-bound site is
+        intentionally unresolved per §5.14)."""
+        cb_records = [c for c in target.callees if c.get("kind") == "callback"]
+        names = {c["name"] for c in cb_records}
+        assert names == {
+            "handleConfigure", "handleDestroy", "my_periodic_task",
+            "refresh", "on_readable", "on_change",
+        }, f"expected 6 callback methods; got {names!r}"
+
+    def test_call_references_contains_method_names(self, target):
+        """For backward-compat with cross-language consumers, the
+        method names also appear in call_references (deduped, kindless)."""
+        for method in ("handleConfigure", "handleDestroy",
+                       "my_periodic_task", "refresh", "on_readable",
+                       "on_change"):
+            assert method in target.call_references, (
+                f"callback method {method!r} missing from call_references "
+                f"(backward-compat surface): {target.call_references!r}"
+            )

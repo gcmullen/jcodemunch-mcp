@@ -484,32 +484,43 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
             # the head is the well-known callback dispatcher (bind etc.) —
             # plain pattern_a shapes shouldn't pull the strcat tail in.
             set head [_first_word_of_cmd $cmd_text]
-            if {$head ne "" && ![_is_var_word $head]} {
+            # P5.2.7: §6.9 dispatchers (bind / after / fileevent / trace
+            # add) are SUPPRESSED — the dispatcher is never a callee per
+            # the convention.  Method emission below handles their script
+            # arg's method as kind=callback.
+            set head_is_dispatcher [_is_callback_dispatcher $head $cmd_text]
+            if {$head ne "" && ![_is_var_word $head] && !$head_is_dispatcher} {
                 _add_call_to_parent $parent_sym_idx \
                     [_maybe_two_word_ensemble $head $cmd_text]
-            } else {
+            } elseif {[_is_var_word $head]} {
                 set second [_nth_word_of_cmd $cmd_text 1]
                 if {$second ne "" && ![_is_var_word $second]} {
                     _add_call_to_parent $parent_sym_idx $second
                     # P5.2.6: pattern_b-style `$obj method "$x ..."` shape
                     # also produces a §5.3 method_dispatch record.
-                    if {[_is_var_word $head]} {
-                        set line [char_offset_to_line $line_offsets $abs_start]
-                        _add_callee_to_parent $parent_sym_idx \
-                            [_make_method_dispatch_entry $second $head $line]
-                    }
+                    set line [char_offset_to_line $line_offsets $abs_start]
+                    _add_callee_to_parent $parent_sym_idx \
+                        [_make_method_dispatch_entry $second $head $line]
                 }
             }
             set method [dict get $ev method]
             # Method may carry trailing args (e.g. "handleResize %W %w %h").
             # The actual call is the first token; strip the rest.
             if {[regexp {^(\S+)} $method -> first_tok]} { set method $first_tok }
-            set is_callback_dispatcher [expr {$head in {bind after fileevent trace}}]
             if {$method ne "" && $method ne $head
                     && $method ne "(strcat-collapsed)"
                     && ![_is_var_word $method]
-                    && ($is_callback_dispatcher || [_is_var_word $head])} {
+                    && ($head_is_dispatcher || [_is_var_word $head])} {
                 _add_call_to_parent $parent_sym_idx $method
+                # P5.2.7: when the head was a §6.9 dispatcher, the strcat-
+                # extracted method is a §6.12 callback callee.  Emit the
+                # structured record into callees with kind=callback so the
+                # strict diff in 5.2.8 matches convention shape.
+                if {$head_is_dispatcher} {
+                    set line [char_offset_to_line $line_offsets $abs_start]
+                    _add_callee_to_parent $parent_sym_idx \
+                        [_make_callback_entry $method $head $line]
+                }
             }
             return
         }
@@ -657,6 +668,142 @@ proc ::jcm::bridge::_make_method_dispatch_entry {method receiver_hint line} {
         note           "$receiver_hint $method"]
 }
 
+# P5.2.7 — convention §6.9 / §6.12 callback dispatcher recognition.
+# bind / after / fileevent / `trace add ...` are NOT callees themselves;
+# only the SCRIPT argument's first method word is recorded as a
+# callback callee on the enclosing symbol.  See verdict §6 bug #3 +
+# §4b "after 10 / bind 7 / fileevent 9 — §6.9 dispatcher".
+proc ::jcm::bridge::_is_callback_dispatcher {head cmd_text} {
+    if {$head in {bind after fileevent}} { return 1 }
+    if {$head eq "trace"} {
+        set sub [_nth_word_of_cmd $cmd_text 1]
+        if {$sub eq "add"} { return 1 }
+    }
+    return 0
+}
+
+# Bracket/brace/quote-balanced tokenizer for a cmd_text.  Tcl's lrange
+# parses pure list syntax which doesn't respect [...] substitution
+# boundaries — `bind $w <X> [list $obj cb]` would split into 6 tokens
+# including bare `[list` and `cb]`.  This helper keeps bracket-balanced,
+# brace-balanced, and double-quote-balanced groups as single tokens so
+# the script-arg position is recoverable.
+proc ::jcm::bridge::_balanced_split {cmd_text} {
+    set out [list]
+    set n [string length $cmd_text]
+    set i 0
+    while {$i < $n} {
+        while {$i < $n && [string is space [string index $cmd_text $i]]} {
+            incr i
+        }
+        if {$i >= $n} break
+        set start $i
+        set ch [string index $cmd_text $i]
+        if {$ch eq "\["} {
+            set depth 1
+            incr i
+            while {$i < $n && $depth > 0} {
+                set c [string index $cmd_text $i]
+                if {$c eq "\["} { incr depth }
+                if {$c eq "\]"} { incr depth -1 }
+                incr i
+            }
+        } elseif {$ch eq "\{"} {
+            set depth 1
+            incr i
+            while {$i < $n && $depth > 0} {
+                set c [string index $cmd_text $i]
+                if {$c eq "\{"} { incr depth }
+                if {$c eq "\}"} { incr depth -1 }
+                incr i
+            }
+        } elseif {$ch eq "\""} {
+            incr i
+            while {$i < $n} {
+                set c [string index $cmd_text $i]
+                if {$c eq "\\"} {
+                    incr i 2
+                    continue
+                }
+                if {$c eq "\""} { incr i; break }
+                incr i
+            }
+        } else {
+            while {$i < $n && ![string is space [string index $cmd_text $i]]} {
+                incr i
+            }
+        }
+        lappend out [string range $cmd_text $start [expr {$i - 1}]]
+    }
+    return $out
+}
+
+# Given a §6.9 dispatcher's cmd_text and head, locate the SCRIPT arg,
+# extract its first non-var literal word (the callback method).  Returns
+# "" when the script is variable-bound (§5.14 callback_var case) or
+# when no literal method word can be recovered.
+#
+# Supports three §6.12 script shapes:
+#   "$this method args"     (strcat / quoted string)
+#   [list $this method args]
+#   {method args}           (brace-literal callback prefix)
+proc ::jcm::bridge::_extract_callback_method_from_cmd {head cmd_text} {
+    set words [_balanced_split $cmd_text]
+    set script_idx 0
+    switch -- $head {
+        bind      { set script_idx 3 }
+        after     { set script_idx 2 }
+        fileevent { set script_idx 3 }
+        trace     {
+            set sub1 ""
+            if {[llength $words] > 1} { set sub1 [lindex $words 1] }
+            if {$sub1 eq "add"} { set script_idx 5 }
+        }
+    }
+    if {$script_idx == 0} { return "" }
+    if {$script_idx >= [llength $words]} { return "" }
+    set script_word [lindex $words $script_idx]
+    if {$script_word eq ""} { return "" }
+    if {[_is_var_word $script_word]} { return "" }
+    # Strip [list ...] wrapper — recovers the most common bracket
+    # callback shape.  Other bracket forms ([expr {...}], [build_cb $x])
+    # are not statically recoverable -> unresolved.
+    if {[string index $script_word 0] eq "\["} {
+        if {[regexp {^\[\s*list\s+(.+?)\s*\]$} $script_word -> inner]} {
+            set script_word $inner
+        } else {
+            return ""
+        }
+    }
+    # Strip surrounding {...} or "..." wrapper if present, then split.
+    if {[string index $script_word 0] eq "\{" \
+            && [string index $script_word end] eq "\}"} {
+        set script_word [string range $script_word 1 end-1]
+    } elseif {[string index $script_word 0] eq "\"" \
+            && [string index $script_word end] eq "\""} {
+        set script_word [string range $script_word 1 end-1]
+    }
+    set parts [_balanced_split $script_word]
+    foreach w $parts {
+        if {$w eq ""} continue
+        if {[_is_var_word $w]} continue
+        if {[string index $w 0] eq "\["} continue
+        if {[string index $w 0] eq "\{"} continue
+        return $w
+    }
+    return ""
+}
+
+# Build a §6.12 callback callee entry.  note carries the dispatcher head
+# for human readability.
+proc ::jcm::bridge::_make_callback_entry {method dispatcher_head line} {
+    return [dict create \
+        name  $method \
+        line  $line \
+        kind  callback \
+        note  $dispatcher_head]
+}
+
 # Route an unresolved-kind event through unresolved_detector::detect and
 # append the result to the enclosing parent symbol.
 #
@@ -695,9 +842,27 @@ proc ::jcm::bridge::_handle_unresolved {ev cmd_text abs_start parent_sym_idx} {
 # ---------------------------------------------------------------------------
 
 proc ::jcm::bridge::_handle_pattern_a {ev cmd_text abs_start abs_end parent_sym_idx parent_qname} {
+    variable line_offsets
     set name [dict get $ev name]
     set arg_count [dict get $ev arg_count]
     set slots [_synth_slots_from_cmd $cmd_text]
+
+    # P5.2.7: §6.9 callback dispatcher (bind / after / fileevent /
+    # trace add) — emit the kind=callback record for the script arg's
+    # first method word.  Done FIRST so subsequent A-row recursion
+    # (e.g., bind's script body walk at recursion_tables:127) still
+    # captures inner call edges.  The bare-dispatcher emission at the
+    # end of this proc is suppressed when is_cb_dispatcher is 1.
+    set is_cb_dispatcher [_is_callback_dispatcher $name $cmd_text]
+    if {$is_cb_dispatcher} {
+        set _cb_method [_extract_callback_method_from_cmd $name $cmd_text]
+        if {$_cb_method ne ""} {
+            _add_call_to_parent $parent_sym_idx $_cb_method
+            set _cb_line [char_offset_to_line $line_offsets $abs_start]
+            _add_callee_to_parent $parent_sym_idx \
+                [_make_callback_entry $_cb_method $name $_cb_line]
+        }
+    }
 
     # Sub-table C first — schema-only handlers (inherit/superclass/
     # package require/try/switch/dict). They mutate the enclosing symbol
@@ -758,6 +923,11 @@ proc ::jcm::bridge::_handle_pattern_a {ev cmd_text abs_start abs_end parent_sym_
     # literal — no event surfaces inside. Sweep the cmd words for known
     # script flags and recurse manually into the next word's content.
     _sweep_script_flags $cmd_text $abs_start $parent_sym_idx $parent_qname
+
+    # P5.2.7: §6.9 callback dispatchers had their kind=callback record
+    # emitted at the top of this proc.  Suppress the dispatcher's own
+    # bare-name emission per convention §6.9.
+    if {$is_cb_dispatcher} { return }
 
     # Otherwise — treat the head as a callee on the parent.
     # P5.2.5: for kept-ensemble dispatchers (grid / pack / wm / winfo /
