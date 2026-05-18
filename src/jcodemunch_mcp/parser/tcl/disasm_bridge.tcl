@@ -1574,6 +1574,11 @@ namespace eval ::jcm::bridge {
         actual configure create delete families measure metrics names
     } { set _kept_ensemble_subs(font:$_sub) 1 }
 
+    # tkwait — Tk [tkwait.htm]
+    foreach _sub {
+        visibility variable window
+    } { set _kept_ensemble_subs(tkwait:$_sub) 1 }
+
     # iTcl delete — [ItclCmd/index]
     foreach _sub {
         object class namespace
@@ -1588,7 +1593,7 @@ namespace eval ::jcm::bridge {
 # form per convention §5.10 (v1.3 P3.1) when TYPE is a literal.
 proc ::jcm::bridge::_maybe_two_word_ensemble {name cmd_text} {
     variable _kept_ensemble_subs
-    if {$name ni {grid pack place wm winfo image font delete}} {
+    if {$name ni {grid pack place wm winfo image font delete tkwait}} {
         return $name
     }
     set sub [_nth_word_of_cmd $cmd_text 1]
