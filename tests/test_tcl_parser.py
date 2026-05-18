@@ -2245,3 +2245,124 @@ class TestKeptEnsembleTwoWordEmission:
             f"bare `winfo` emitted alongside 2-word phrases; "
             f"call_references = {symbol.call_references!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.6 — convention §5.3 method_dispatch emission
+#
+# `$obj method args` patterns: the second word is the method name, the
+# first word is a variable substitution that's statically unresolvable.
+# Convention §5.3 requires a per-call-site record in callees:
+#   {name: method, line: int, kind: method_dispatch,
+#    receiver_hint: "$obj-source-form", note: "$obj method"}
+#
+# Per BRIDGE_VS_GOLD_VALIDATION §3 + §6 bug #1 this closes ~600 of the
+# 1464 baseline misses — the single biggest recall lift in Phase 5.2.
+#
+# call_references continues to carry the bare method name (deduped) for
+# backward compat with existing cross-language consumers; callees is the
+# new per-call-site multiset surface that the strict diff in 5.2.8 will
+# evaluate.
+# ---------------------------------------------------------------------------
+
+
+METHOD_DISPATCH_FIXTURE = '''\
+proc test_dispatch {clock obj widget} {
+    $clock addListener $obj
+    $clock removeListener $obj
+    ${obj} configure -value 42
+    $widget pack -side top
+    $widget configure -bg red
+    $widget grid -row 0
+    set w $widget.label
+    $w insert end "hello"
+    return 1
+}
+'''
+
+
+class TestMethodDispatchEmission:
+    @pytest.fixture
+    def callees(self):
+        symbols = parse_file(METHOD_DISPATCH_FIXTURE, "md.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "test_dispatch")
+        return target.callees
+
+    def test_all_call_sites_recorded_as_method_dispatch(self, callees):
+        """Convention §5.3 wants per-call-site multiset.  Fixture has 7
+        `$var method ...` call sites — all 7 must surface as method_dispatch
+        callees."""
+        md = [c for c in callees if c.get("kind") == "method_dispatch"]
+        assert len(md) == 7, (
+            f"expected 7 method_dispatch records (one per call site); "
+            f"got {len(md)}: {md!r}"
+        )
+
+    def test_method_name_is_the_second_word(self, callees):
+        names = [c["name"] for c in callees]
+        assert "addListener" in names
+        assert "removeListener" in names
+        assert "configure" in names
+        assert "pack" in names
+        assert "grid" in names
+        assert "insert" in names
+
+    def test_receiver_hint_preserves_dollar_var_verbatim(self, callees):
+        """$obj source form must be recorded verbatim per §5.3 — without
+        receiver_hint, refactor / blast-radius tools can't cluster
+        method_dispatch by receiver."""
+        hints = {c["receiver_hint"] for c in callees}
+        assert "$clock" in hints, f"missing $clock receiver_hint; got {hints!r}"
+        assert "${obj}" in hints, f"missing ${{obj}} brace-form; got {hints!r}"
+        assert "$widget" in hints, f"missing $widget receiver_hint; got {hints!r}"
+        assert "$w" in hints, f"missing $w receiver_hint; got {hints!r}"
+
+    def test_same_method_on_different_receivers_distinct_entries(self, callees):
+        """`configure` is called on both ${obj} and $widget — both must
+        surface as separate method_dispatch records (multiset, not
+        deduped)."""
+        configures = [c for c in callees if c["name"] == "configure"]
+        assert len(configures) == 2, (
+            f"expected 2 configure method_dispatch records (one per receiver); "
+            f"got {len(configures)}: {configures!r}"
+        )
+        receivers = {c["receiver_hint"] for c in configures}
+        assert receivers == {"${obj}", "$widget"}, (
+            f"expected configure on ${{obj}} AND $widget; got {receivers!r}"
+        )
+
+    def test_line_numbers_match_source(self, callees):
+        """Each call site's `line` must match the source line (1-based).
+        The fixture's calls are at lines 2 (addListener), 3 (removeListener),
+        4 (configure on obj), 5 (pack), 6 (configure on widget), 7 (grid),
+        9 (insert) — relative to the proc body, which starts at line 1."""
+        by_line = {c["line"]: c["name"] for c in callees}
+        assert by_line == {
+            2: "addListener", 3: "removeListener", 4: "configure",
+            5: "pack", 6: "configure", 7: "grid", 9: "insert",
+        }, f"line mapping wrong: {by_line!r}"
+
+    def test_note_field_uses_receiver_method_format(self, callees):
+        """Convention §5.3 recommends note shape `$obj <method>`."""
+        for c in callees:
+            assert c["note"] == f"{c['receiver_hint']} {c['name']}", (
+                f"note shape wrong for {c!r}; "
+                f"expected '{c['receiver_hint']} {c['name']}'"
+            )
+
+    def test_call_references_keeps_deduped_method_names(self):
+        """call_references stays as the deduped name-only list for
+        cross-language backward compat (5a path)."""
+        symbols = parse_file(METHOD_DISPATCH_FIXTURE, "md.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "test_dispatch")
+        # configure appears twice in callees but ONCE in call_references.
+        assert target.call_references.count("configure") == 1, (
+            f"call_references should be deduped; got {target.call_references!r}"
+        )
+        # Each method name should appear exactly once.
+        for method in ("addListener", "removeListener", "configure",
+                       "pack", "grid", "insert"):
+            assert target.call_references.count(method) == 1, (
+                f"call_references method {method!r} count != 1: "
+                f"{target.call_references!r}"
+            )

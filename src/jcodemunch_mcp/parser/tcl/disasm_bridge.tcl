@@ -431,6 +431,11 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
                 set second [_nth_word_of_cmd $cmd_text 1]
                 if {$second ne "" && ![_is_var_word $second]} {
                     _add_call_to_parent $parent_sym_idx $second
+                    # P5.2.6: method_dispatch via pattern_b-shaped recovery
+                    # (`$itk_component(eu) method ...` arrives here).
+                    set line [char_offset_to_line $line_offsets $abs_start]
+                    _add_callee_to_parent $parent_sym_idx \
+                        [_make_method_dispatch_entry $second $head $line]
                 }
             } else {
                 if {$head ne ""} {
@@ -451,7 +456,18 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
             return
         }
         pattern_b {
-            _add_call_to_parent $parent_sym_idx [dict get $ev method]
+            set method [dict get $ev method]
+            _add_call_to_parent $parent_sym_idx $method
+            # P5.2.6: structured §5.3 method_dispatch record into callees.
+            # call_references stays for cross-language backward compat;
+            # callees is the per-call-site multiset for strict diff.
+            set receiver [_first_word_of_cmd $cmd_text]
+            if {$receiver ne "" && [_is_var_word $receiver]
+                    && $method ne "" && ![_is_var_word $method]} {
+                set line [char_offset_to_line $line_offsets $abs_start]
+                _add_callee_to_parent $parent_sym_idx \
+                    [_make_method_dispatch_entry $method $receiver $line]
+            }
             return
         }
         callback {
@@ -475,6 +491,13 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
                 set second [_nth_word_of_cmd $cmd_text 1]
                 if {$second ne "" && ![_is_var_word $second]} {
                     _add_call_to_parent $parent_sym_idx $second
+                    # P5.2.6: pattern_b-style `$obj method "$x ..."` shape
+                    # also produces a §5.3 method_dispatch record.
+                    if {[_is_var_word $head]} {
+                        set line [char_offset_to_line $line_offsets $abs_start]
+                        _add_callee_to_parent $parent_sym_idx \
+                            [_make_method_dispatch_entry $second $head $line]
+                    }
                 }
             }
             set method [dict get $ev method]
@@ -596,6 +619,42 @@ proc ::jcm::bridge::_add_call_to_parent {parent_sym_idx callee} {
         dict set sym call_references $calls
         lset symbols $parent_sym_idx $sym
     }
+}
+
+# Append a structured callee record (convention v1.5 §4.2) to the parent
+# symbol's callees list.  Unlike call_references which is deduped by name,
+# callees keeps one entry per call site — gold corpus / strict diff
+# matches multiset semantics.
+#
+# P5.2.6: invoked from the three pattern_b-shaped emission sites
+# (pattern_b, callback when head is $var, unrecognized when head is $var)
+# to record method_dispatch callees per §5.3.
+proc ::jcm::bridge::_add_callee_to_parent {parent_sym_idx entry} {
+    if {$parent_sym_idx < 0} return
+    if {![dict exists $entry name]} return
+    if {[dict get $entry name] eq ""} return
+    variable symbols
+    set sym [lindex $symbols $parent_sym_idx]
+    set callees [list]
+    if {[dict exists $sym callees]} {
+        set callees [dict get $sym callees]
+    }
+    lappend callees $entry
+    dict set sym callees $callees
+    lset symbols $parent_sym_idx $sym
+}
+
+# Build a §5.3 method_dispatch callee entry.  receiver_hint is the
+# verbatim source-form of the receiver expression ("$obj", "${obj}",
+# "$itk_component(eu)", etc.).  line is the 1-based file line of the
+# call site (resolved from char offsets via char_offset_to_line).
+proc ::jcm::bridge::_make_method_dispatch_entry {method receiver_hint line} {
+    return [dict create \
+        name           $method \
+        line           $line \
+        kind           method_dispatch \
+        receiver_hint  $receiver_hint \
+        note           "$receiver_hint $method"]
 }
 
 # Route an unresolved-kind event through unresolved_detector::detect and
