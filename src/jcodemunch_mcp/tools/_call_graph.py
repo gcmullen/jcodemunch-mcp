@@ -34,6 +34,8 @@ if TYPE_CHECKING:
     from ..storage import IndexStore
     from ..storage.index_store import CodeIndex
 
+from . import _tcl_callees
+
 
 # ---------------------------------------------------------------------------
 # Low-level helpers
@@ -186,6 +188,9 @@ def _callees_from_references(
                             })
                         break
 
+    # ──── TCL bridge enrichment seam — see tools/_tcl_callees.py ────
+    results = _tcl_callees.enrich_callees_from_references(results, sym)
+    # ──── end TCL bridge seam ────
     return results
 
 
@@ -494,6 +499,9 @@ def find_direct_callees(
         for c in ast_callees:
             if c["id"] not in lsp_ids:
                 merged.append(c)
+        # ──── TCL bridge enrichment seam — see tools/_tcl_callees.py ────
+        merged = _tcl_callees.enrich_find_direct_callees(merged, sym)
+        # ──── end TCL bridge seam ────
         return merged
 
     # Fallback: text heuristic
@@ -544,7 +552,11 @@ def find_direct_callees(
                     "resolution": "text_matched",
                 })
 
-    return list(dispatch_cls) + list(lsp_callees) + callees
+    merged_callees = list(dispatch_cls) + list(lsp_callees) + callees
+    # ──── TCL bridge enrichment seam — see tools/_tcl_callees.py ────
+    merged_callees = _tcl_callees.enrich_find_direct_callees(merged_callees, sym)
+    # ──── end TCL bridge seam ────
+    return merged_callees
 
 
 # ---------------------------------------------------------------------------

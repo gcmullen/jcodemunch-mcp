@@ -16,6 +16,7 @@ from .get_blast_radius import (
 )
 from ._call_graph import _symbol_body
 from ..storage import record_savings
+from . import _tcl_callees
 
 logger = logging.getLogger(__name__)
 
@@ -1498,6 +1499,10 @@ def _plan_rename(index, store, owner, name, sym, new_name, depth):
         "collision_check": collision,
         "summary": {"files": len(edits), "edit_blocks": total_blocks, "warnings": len(all_warnings)},
     }
+
+    # ──── TCL bridge enrichment seam — see tools/_tcl_callees.py ────
+    result = _tcl_callees.enrich_rename_plan(result, sym)
+    # ──── end TCL bridge seam ────
 
     # Token savings
     _record_savings(len(all_files), result)

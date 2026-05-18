@@ -1901,3 +1901,64 @@ class TestLanguageCoverage:
             )
 
 
+# ---------------------------------------------------------------------------
+# TCL enrichment seam integration tests
+# ---------------------------------------------------------------------------
+
+class TestTclRenamePlanEnrichment:
+    """Integration tests for the TCL bridge enrichment seam in _plan_rename."""
+
+    def _make_index_and_store(self, sym_callees=None):
+        """Build a minimal in-memory index + store for a single TCL proc rename."""
+        sym = {
+            "id": "utils.tcl::helper#proc",
+            "name": "helper",
+            "file": "utils.tcl",
+            "line": 1,
+            "end_line": 1,
+        }
+        if sym_callees is not None:
+            sym["callees"] = sym_callees
+        idx = FakeIndex(
+            symbols=[sym],
+            imports={},
+            source_files=["utils.tcl"],
+            file_languages={"utils.tcl": "tcl"},
+        )
+        store = FakeStoreWithIndex(
+            idx,
+            files={"utils.tcl": "proc helper {} { return 42 }\n"},
+        )
+        return idx, store, sym
+
+    def test_tcl_sym_with_callees_adds_tcl_call_sites_to_plan(self):
+        """TCL sym whose callees list contains its own name gets tcl_call_sites on the plan."""
+        from jcodemunch_mcp.tools.plan_refactoring import _plan_rename
+
+        # callees entry where name == sym_name simulates a recursive/self-referencing call
+        # or a caller that has a callees entry referencing this sym.
+        callees = [
+            {"name": "helper", "line": 5, "kind": "static", "receiver_hint": None, "note": None},
+        ]
+        idx, store, sym = self._make_index_and_store(sym_callees=callees)
+
+        plan = _plan_rename(idx, store, "owner", "repo", sym, "helper_v2", depth=1)
+        assert plan["type"] == "rename"
+        assert "tcl_call_sites" in plan, (
+            "Expected tcl_call_sites on plan when sym.callees contains a matching entry"
+        )
+        assert plan["tcl_call_sites"][0]["line"] == 5
+        assert plan["tcl_call_sites"][0]["kind"] == "static"
+
+    def test_sym_without_callees_plan_unchanged(self):
+        """Symbol with no callees field produces a plan with no tcl_call_sites (regression guard)."""
+        from jcodemunch_mcp.tools.plan_refactoring import _plan_rename
+
+        idx, store, sym = self._make_index_and_store(sym_callees=None)
+
+        plan = _plan_rename(idx, store, "owner", "repo", sym, "helper_v2", depth=1)
+        assert plan["type"] == "rename"
+        assert "tcl_call_sites" not in plan, (
+            "tcl_call_sites must not appear when sym has no callees (non-TCL regression guard)"
+        )
+

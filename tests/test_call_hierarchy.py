@@ -805,4 +805,108 @@ class TestResolutionTiers:
                                     depth=3, storage_path=store)
         assert "error" not in result
         for caller in result["callers"]:
+
             assert "resolution" in caller
+
+
+class TestTclCalleesIntegration:
+    """Integration guard: TCL enrichment via _call_graph seams."""
+
+    def test_tcl_symbol_with_callees_carries_tcl_call_sites(self, tmp_path):
+        """A TCL symbol whose callees list is populated should have tcl_call_sites
+        on matching resolved callee entries returned by get_call_hierarchy."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        from jcodemunch_mcp.tools._call_graph import find_direct_callees
+
+        src = tmp_path / "src"
+        store_path = tmp_path / "store"
+        src.mkdir()
+        store_path.mkdir()
+
+        (src / "utils.tcl").write_text("proc helper {} { return 42 }\n")
+        (src / "main.tcl").write_text("source utils.tcl\nproc caller {} { helper }\n")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store_path))
+        assert result["success"] is True
+
+        from jcodemunch_mcp.storage import IndexStore
+        store = IndexStore(str(store_path))
+        owner, repo_name = result["repo"].split("/", 1)
+        index = store.load_index(owner, repo_name)
+
+        # Find the 'caller' symbol and inject synthetic callees metadata
+        caller_sym = None
+        for sym in index.symbols:
+            if sym.get("name") == "caller":
+                caller_sym = sym
+                break
+
+        if caller_sym is None:
+            pytest.skip("TCL caller symbol not found in index — parser may not have run")
+
+        # Inject per-call-site metadata (simulates what the disasm bridge produces)
+        caller_sym["callees"] = [
+            {"name": "helper", "line": 2, "kind": "static", "receiver_hint": None, "note": None},
+        ]
+
+        symbols_by_file: dict = {}
+        for sym in index.symbols:
+            symbols_by_file.setdefault(sym.get("file", ""), []).append(sym)
+
+        callees = find_direct_callees(index, store, owner, repo_name, caller_sym, symbols_by_file)
+
+        helper_entries = [c for c in callees if c.get("name") == "helper"]
+        if not helper_entries:
+            pytest.skip("TCL callee 'helper' not resolved — text heuristic did not match")
+
+        assert "tcl_call_sites" in helper_entries[0], (
+            "Expected tcl_call_sites on resolved callee when sym.callees is populated"
+        )
+        assert helper_entries[0]["tcl_call_sites"][0]["line"] == 2
+        assert helper_entries[0]["tcl_call_sites"][0]["kind"] == "static"
+
+    def test_non_tcl_symbol_output_unchanged(self, tmp_path):
+        """Non-TCL symbol (no callees field) must produce output byte-equal to
+        pre-enrichment behaviour — regression guard."""
+        from jcodemunch_mcp.tools._call_graph import find_direct_callees
+
+        src = tmp_path / "src"
+        store_path = tmp_path / "store"
+        src.mkdir()
+        store_path.mkdir()
+
+        (src / "utils.py").write_text("def helper():\n    return 42\n")
+        (src / "main.py").write_text(
+            "from utils import helper\ndef caller():\n    return helper()\n"
+        )
+
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store_path))
+        assert result["success"] is True
+
+        from jcodemunch_mcp.storage import IndexStore
+        store = IndexStore(str(store_path))
+        owner, repo_name = result["repo"].split("/", 1)
+        index = store.load_index(owner, repo_name)
+
+        caller_sym = None
+        for sym in index.symbols:
+            if sym.get("name") == "caller":
+                caller_sym = sym
+                break
+
+        assert caller_sym is not None
+        # No callees field — pure Python symbol
+        assert "callees" not in caller_sym or not caller_sym.get("callees")
+
+        symbols_by_file: dict = {}
+        for sym in index.symbols:
+            symbols_by_file.setdefault(sym.get("file", ""), []).append(sym)
+
+        callees = find_direct_callees(index, store, owner, repo_name, caller_sym, symbols_by_file)
+
+        # No tcl_call_sites must appear on any entry
+        for entry in callees:
+            assert "tcl_call_sites" not in entry, (
+                f"tcl_call_sites leaked onto non-TCL callee entry: {entry}"
+            )
