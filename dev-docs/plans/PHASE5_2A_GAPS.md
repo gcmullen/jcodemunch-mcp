@@ -1,9 +1,22 @@
-# Phase 5.2a — Tracked gaps for end-of-phase triage
+# Phase 5.2a — Tracked gaps + Phase 5 sub-phase roadmap
 
 **Living doc.** Each entry is a gap the 5.2a DSL walker will not (or may not)
-close. Categorized so 5.2a.6 triage can route each to FIX (still in 5.2a or
-5.5 cleanup), DEFER (Phase 6 convention / gold re-arbitration / auto-derive),
-or ACCEPT (documented limitation).
+close.
+
+## Sub-phase routing policy
+
+**Phase 6 is reserved for sandbox-needing work only.** The bridge is purely
+static (no `interp create`, no `exec tclsh`, no `source` of user code) —
+nothing in current scope requires a sandbox. All non-sandbox follow-up work
+stays in Phase 5 sub-phases:
+
+| Sub-phase | Theme | Gaps owned |
+|---|---|---|
+| **5.5** | Verdict + closeout + small architectural cleanups | G2, G11, G12 |
+| **5.6** | Gold re-arbitration + convention v1.5 + per-pattern bridge fixes | G1, G3, G7, G8, G13, G14, convention v1.5 (tailcall/uplevel/trace) |
+| **5.7** | Cross-file orchestration in extractor.py (per-namespace import maps; augment-target registries) | G5, G10 |
+| **5.8** | Auto-derive DSL grammar from package bytecode (spike §11) | spike §11 |
+| **Phase 6** | (reserved; currently empty — sandbox-needing investigations only) | — |
 
 Per the gold-first principle: bridge tracks gold. Most gaps below are NOT
 candidates for bridge expansion — they're candidates for gold-side
@@ -19,10 +32,10 @@ investigation, convention edits, or documented limitations.
   Bridge emits one (`::snit::`).
 - **Impact:** 1 strict miss on snit/validate.tcl. Bridge symbol-set recall
   35/36 = 0.972 instead of 36/36.
-- **Disposition candidate:** DEFER — Phase 6 gold re-arbitration. Verify
-  whether double-emission is consistent gold convention across `namespace
-  eval NS:: { ... }` sites in other corpora, or an annotator one-off here.
-  If one-off, gold should be corrected to single-emit.
+- **Disposition:** **5.6 gold re-arbitration**. Verify whether
+  double-emission is consistent gold convention across `namespace eval NS::
+  { ... }` sites in other corpora, or an annotator one-off here. If
+  one-off, gold should be corrected to single-emit.
 
 ### G2 — Constructor/destructor wire-kind convention (global)
 - **Where:** `disasm_bridge.tcl` `_apply_a_row` lines ~1063 remap kind ∈
@@ -52,33 +65,32 @@ investigation, convention edits, or documented limitations.
   5.2.7 doesn't fully cover.
 - **5.2a.3 lift:** small — closes the +13 iTk-component-name misses, walks
   CONFIG-BODY, but cannot single-handedly take DcsWidgets to 0.75+.
-- **Disposition candidate:** FIX in a future 5.2.X refinement pass
-  (extends 5.2.6 method_dispatch handling to array-indexed receivers;
-  extends 5.2.7 callback emission to quoted/braced first-word shapes).
-  Schedule decision belongs in 5.2a.6 triage.
+- **Disposition:** **5.6 per-pattern bridge fixes** (extends 5.2.6
+  method_dispatch handling to array-indexed receivers; extends 5.2.7
+  callback emission to quoted/braced first-word shapes). Largely
+  superseded by G14 (Pattern A — qualified static receivers).
 
-### G4 — DSL-impl-file rule (§5.4.2 P3.1) currently broken
-- **Where:** `git-gui/lib/class.tcl` — bridge over-emits 15 extra callees
-  (precision 0.25, recall 0.4545 per `bridge_diff_v2.json`). Root cause:
-  SUBTABLE_A rows for `constructor`/`method`/`field` recursively walk their
-  bodies even when they're defined inside `proc class { name body } { ... }`
-  — those are data consumers, not class declarations.
-- **Scope:** 5.2a.4 owns this. Needs a `_parent_is_dsl_impl` helper that
-  detects when the enclosing scope is a DSL-impl proc (name ∈
-  {class, type, widget, define, ...}) and suppresses body recursion +
-  child-symbol synthesis there.
-- **Risk:** bluice corpora have no local `proc class` impls (verified),
-  so the fix is low-regression-risk.
-- **Disposition candidate:** FIX in 5.2a.4.
+### G4 — DSL-impl-file rule (§5.4.2 P3.1) — LANDED in 41c18728
+- **Where:** `git-gui/lib/class.tcl` and similar DSL impl files.
+- **Resolution:** Handled by the DSL grammar `dsl_impl` (mapping `class`,
+  `method`, `constructor`, etc. to `{action suppress}`) combined with
+  ANNOTATIONS rows for `proc class` / `proc field` / `proc method` /
+  `proc constructor` / `proc type` / `proc widget` that push `dsl_impl`
+  onto BODY_GRAMMAR_STACK during the impl proc's body walk. Generic and
+  contextual — no `_parent_is_dsl_impl` helper was needed; the
+  grammar-stack mechanism handled it cleanly.
+- **Status:** CLOSED.
 
 ### G5 — `oo::define` augmenting onto an unresolved class name
 - **Where:** Any `oo::define $varname { ... }` (computed) or
   `oo::define ClassA { ... }` where ClassA is declared in a DIFFERENT
   file the bridge hasn't yet processed.
 - **Impact:** Walker has no class symbol to attribute children to.
-- **Disposition candidate:** ACCEPT (documented limitation) for in-file
-  cases where declaration order is reversed; the bridge is single-pass.
-  Multi-file augmenting is a Phase 6 cross-file resolution concern.
+- **Disposition:** **5.7 cross-file resolution**. Multi-file augmenting
+  needs indexer-level orchestration to pre-scan corpora for class
+  declarations and pass an augment-target registry into per-file bridge
+  invocations. In-file reverse-order cases stay ACCEPT (documented
+  limitation; bridge is single-pass).
 
 ### G6 — `forward` target callee not recorded
 - **Where:** `forward NAME COMMAND_PREFIX` per convention §8.8 limitation
@@ -129,12 +141,11 @@ investigation, convention edits, or documented limitations.
   Tcl's `namespace import` is namespace-scoped (not file-scoped) — `setup.tcl`
   can install an import into `::`, and `widgets.tcl` later uses bare `class`
   with no import locally visible. Bridge has no cross-file state.
-- **Disposition candidate:** **Phase 6** — cross-file resolution. Requires
-  indexer-level orchestration (extractor.py) to pre-scan all corpus files
-  for `namespace import` calls, build a global per-namespace import map,
-  pass that map as context into each per-file bridge invocation. Companion
-  to spike §11's auto-derive DSL grammar work; both are "the indexer
-  knows more than any single file does."
+- **Disposition:** **5.7 cross-file orchestration**. Requires extractor.py
+  to pre-scan all corpus files for `namespace import` calls, build a
+  global per-namespace import map, pass that map as context into each
+  per-file bridge invocation. Sibling to G5 (cross-file augment-target
+  registry); the two could share infrastructure.
 - **Today's mitigation:** the convention §5.4.2 by-analogy stance (treat
   bare `class` as iTcl unconditionally) is what gold validates against,
   so the gap is documented-not-blocking until a corpus surfaces a
@@ -160,19 +171,14 @@ investigation, convention edits, or documented limitations.
 
 ## Surfaced during 5.2a.2 (Clay + oo::define, agent-implemented)
 
-### G9 — `oo::define <unresolved>` falls back to file-scope attribution
-- **Where:** `dsl_walker.tcl::_apply_outer_row` `else` branch (when `kind=""`
-  but `_find_class_by_qname` returns -1). Today: emits `WARN:` to stderr,
-  recurses into BODY with `parent_sym_idx=parent_sym_idx`, `parent_qname=parent_qname`
-  — i.e., directives get attributed to FILE SCOPE.
-- **Why it landed:** My 5.2a.2 executor brief contained this fallback path
-  (the slop the hook caught). The agent implemented what I asked.
-- **Impact:** 9 of clay.tcl's 17 remaining bridge_only extras come from
-  dynamic `oo::define $class {...}` shapes. The fallback over-emits
-  symbols at file scope that gold doesn't have.
-- **Disposition candidate:** FIX in 5.5 closeout — change `_apply_outer_row`
-  to SKIP body recursion entirely when the augmenting target isn't
-  resolvable. This is the correct gold-first behavior.
+### G9 — `oo::define <unresolved>` fallback — LANDED in 097b008
+- **Where:** `dsl_walker.tcl::_apply_outer_row` augment branch.
+- **Resolution:** When `_find_class_by_qname` returns -1 (target is a
+  variable like `$class`, or otherwise unresolvable), the bridge now
+  emits the augment-command-name (`::oo::define`) as a qualified callee
+  on the parent and SKIPS body recursion (no attribution to wrong scope).
+- **Lift:** clay corpus 0.5962 → 0.6250.
+- **Status:** CLOSED.
 
 ---
 
@@ -187,15 +193,62 @@ combined 5.2a.6 triage view.
 - **Status:** Earlier flagged as a bridge expansion candidate (emit `?` from
   `_handle_unresolved`). Per gold-first, blocked on gold-consistency audit
   across all 39 corpora.
-- **Disposition candidate:** Defer until gold audit. If gold is consistent
-  → FIX (small bridge change). If gold is inconsistent → Phase 6 gold
-  re-arbitration.
+- **Disposition:** **5.6 gold audit + bridge**. If gold is consistent
+  across all 39 corpora → FIX (small bridge change: emit `name="?"` from
+  `_handle_unresolved` for fully-dynamic dispatch). If inconsistent →
+  5.6 gold re-arbitration on the inconsistent files.
 
 ### G8 — `tcl::mathfunc::*` math function refs in `expr {...}`
 - **Where:** Convention §6.8 says optional emission.
 - **Status:** Gold-consistency unaudited. Bridge emits nothing.
-- **Disposition candidate:** Defer until gold audit confirms whether
-  consistent gold use exists.
+- **Disposition:** **5.6 gold audit** — confirm whether consistent gold
+  use exists; if yes, small bridge fix in expr-operand handling.
+
+---
+
+### G13 — Pattern B: dual-form symbol emission (`::Class::method` AND `Class::method`)
+- **Where:** Surfaced in DcsWidgets investigation. Gold for
+  `bluice-DcsWidgets/ComponentGateExtension.tcl` emits the same method
+  under TWO separate symbol entries: one with leading `::` (fully
+  qualified absolute) and one without (relative to enclosing namespace).
+  Bridge emits only the canonical fully-qualified form.
+- **Impact:** ~5-9 misses on ComponentGateExtension.tcl alone (the
+  unqualified-form symbol's callees never compare against gold because
+  the symbol doesn't exist in bridge output).
+- **Why it's not a clear bridge fix:** Same shape as G1 (`::snit` vs
+  `::snit::` double-emission). Looks like gold-annotator inconsistency,
+  not a convention rule. Bridge-side dual-emission would be
+  gold-overriding, not gold-tracking.
+- **Disposition:** **5.6 gold audit**. Audit whether dual-form is
+  consistent across all 39 corpora. If consistent → convention should
+  formalize and bridge can match. If only some files → those gold files
+  need re-arbitration.
+
+### G14 — Pattern A: qualified static receiver method-dispatch (`::ns method args`)
+- **Where:** Confirmed pattern in DcsWidgets (`::mediator
+  announceDestruction $this`, ~19 misses) and BWidget
+  (`BWidget::grab release $path`, `BWidget::focus release $path`, ~4
+  misses). Likely present in other corpora wherever code uses a USER
+  namespace as a static receiver for method-style dispatch.
+- **Today's bridge behavior:** When first word is qualified (e.g.
+  `::mediator`), the bare-static-emit branch at `_handle_pattern_a:967-974`
+  emits ONE qualified callee (`::mediator`). Second word (e.g.
+  `announceDestruction`) is dropped.
+- **Gold expectation:** TWO callees at the same line: a 2-word qualified
+  callee (`::mediator announceDestruction`) AND a `method_dispatch` callee
+  with `name=announceDestruction`, `receiver_hint=::mediator`. Mirrors
+  convention §5.3 method_dispatch for `$obj method` but with a static
+  qualified receiver instead of a variable receiver.
+- **Generic fix:** ~15 LOC in `_handle_pattern_a`'s bare-static-emit
+  branch. Predicate: bare-name (qualified-name stripped of namespace
+  prefix) not in Tier 2 denylist + first word starts with `::` or
+  contains `::` + second word is a literal method name. Emit BOTH the
+  2-word qualified and the method_dispatch.
+- **Estimated lift:** ~19 (DcsWidgets) + ~4 (BWidget) + unknown other
+  corpora = ~23-30+ misses recovered. Aggregate ≈ +0.01-0.02.
+- **False-positive guard:** Tier 1/2/3 denylist consultation prevents
+  `::set var val` style stdlib-qualified spurious emission.
+- **Disposition:** **5.6 per-pattern bridge fix**. Executor-ready.
 
 ---
 
