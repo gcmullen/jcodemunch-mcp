@@ -1875,19 +1875,101 @@ class TestTierDenylistFilter:
 
     def test_qualified_static_call_survives_filter(self, smoke_symbol):
         """A real qualified call must survive the filter — the Tier
-        denylist must not be over-eager."""
-        # Convention §5.2 says qualified names are preserved verbatim;
-        # the call we made was `::my::api::do_work`.  5.2.2 will lock
-        # the verbatim preservation; for now we only assert that a real
-        # static callee survives the filter rather than being incorrectly
-        # filtered as a Tier hit.  The bare-name "do_work" or the
-        # qualified form is acceptable today.
+        denylist must not be over-eager.  Also implicitly locks
+        convention §5.2 qualified-name preservation: the bridge keeps
+        the verbatim source-form name; downstream tools resolve."""
+        assert "::my::api::do_work" in smoke_symbol.call_references, (
+            f"qualified static callee was filtered out incorrectly OR "
+            f":: prefix was stripped; call_references = "
+            f"{smoke_symbol.call_references!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.2 — convention §5.2 qualified-name preservation
+#
+# The bridge MUST preserve every segment of a qualified name verbatim —
+# leading `::` is kept if present, `Ns::Sub::foo` stays `Ns::Sub::foo`,
+# `msgcat::mc` does not collapse to `mc`.  Static analyzers cannot
+# reliably reconstruct the current namespace at every call site without
+# simulating namespace eval nesting; the convention preserves source
+# form and lets downstream consumers handle resolution.
+#
+# Investigation note (P5.2.2 entry): the BRIDGE_VS_GOLD_VALIDATION §3
+# "mc 51" entry initially looked like a qualified-name stripping bug,
+# but inspection of the actual gold corpus (git-gui/blame.tcl) shows
+# gold annotators recorded `mc` (the verbatim source form), not
+# `msgcat::mc`.  The 51-miss count is multiset semantics — gold has
+# one entry per call site, the bridge's call_references dedupes by
+# name.  That gap closes when 5.2.6 populates callees with one entry
+# per call site.  This test class therefore only locks that the
+# bridge does NOT regress on already-correct verbatim preservation.
+# ---------------------------------------------------------------------------
+
+
+QNAME_PRESERVATION_FIXTURE = '''\
+namespace eval ::testns {
+    proc dispatcher {} {
+        # absolute qualified
+        ::msgcat::mc some_key
+        # relative qualified (1 ::)
+        msgcat::mc another_key
+        # multi-segment qualified
+        ::DCS::ComponentGate $name
+        # multi-segment relative
+        DCS::Component::sendUpdate $name
+        # mediator pattern from convention §5.2 worked example
+        ::mediator register $this
+        return 1
+    }
+}
+'''
+
+
+class TestQualifiedNamePreservation:
+    def test_absolute_qualified_kept_verbatim(self):
+        symbols = parse_file(QNAME_PRESERVATION_FIXTURE, "qn.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "dispatcher")
+        assert "::msgcat::mc" in target.call_references, (
+            f"absolute qualified `::msgcat::mc` was stripped or normalized; "
+            f"call_references = {target.call_references!r}"
+        )
+
+    def test_relative_qualified_kept_verbatim(self):
+        symbols = parse_file(QNAME_PRESERVATION_FIXTURE, "qn.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "dispatcher")
+        assert "msgcat::mc" in target.call_references, (
+            f"relative qualified `msgcat::mc` did not survive verbatim; "
+            f"call_references = {target.call_references!r}"
+        )
+
+    def test_multi_segment_qualified_kept_verbatim(self):
+        symbols = parse_file(QNAME_PRESERVATION_FIXTURE, "qn.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "dispatcher")
+        assert "::DCS::ComponentGate" in target.call_references, (
+            f"multi-segment qualified did not survive; "
+            f"call_references = {target.call_references!r}"
+        )
+        assert "DCS::Component::sendUpdate" in target.call_references, (
+            f"multi-segment relative qualified did not survive; "
+            f"call_references = {target.call_references!r}"
+        )
+
+    def test_qualified_dispatcher_call_preserved(self):
+        """`::mediator register $this` is a qualified call to the proc
+        named `::mediator` per §5.10 (qualified-name takes precedence
+        over ensemble interpretation)."""
+        symbols = parse_file(QNAME_PRESERVATION_FIXTURE, "qn.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "dispatcher")
+        # Either the 1-word qualified `::mediator` (per §5.10 v1.3 P3.1)
+        # or `::mediator register` (2-word) is acceptable; both forms
+        # preserve the :: prefix. The convention-compliant single-word
+        # form is the target.
         survived = (
-            "::my::api::do_work" in smoke_symbol.call_references
-            or "do_work" in smoke_symbol.call_references
-            or "my::api::do_work" in smoke_symbol.call_references
+            "::mediator" in target.call_references
+            or "::mediator register" in target.call_references
         )
         assert survived, (
-            f"qualified static callee was filtered out incorrectly; "
-            f"call_references = {smoke_symbol.call_references!r}"
+            f"qualified dispatcher call did not preserve :: prefix; "
+            f"call_references = {target.call_references!r}"
         )
