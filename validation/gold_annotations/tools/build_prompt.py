@@ -38,7 +38,7 @@ Constraints:
 - The "files" array order matches the input order.
 
 Schema clarifications (enforced; deviations cause rejection):
-- Top-level object MUST include `schema_version: "1.3"` (convention v1.3).
+- Top-level object MUST include `schema_version: "{CONVENTION_VERSION}"` (convention v{CONVENTION_VERSION}).
 - The top-level `file` field MUST be the basename only (e.g. "AutoSample.tcl"), never a path.
 - symbols is a FLAT array; do not nest child symbols inside a parent. Each symbol stands alone with qualified_name carrying the hierarchy. No "children" arrays.
 - Each symbol carries exactly these keys: qualified_name, line, end_line, kind, visibility, parent_classes, args, arity, package_requires, package_provides, imports, callees, unresolved_dispatches. Do NOT add fields like name, parent, signature, docstring, decorators.
@@ -122,6 +122,15 @@ Emit the wrapping JSON object `{"files": [<annotation>, <annotation>, ...]}` wit
 """
 
 
+def _parse_convention_version(convention_path: Path) -> str:
+    """Pull `**Version:** X.Y` from the convention doc header."""
+    for line in convention_path.read_text().splitlines()[:20]:
+        m = line.strip()
+        if m.lower().startswith("**version:**"):
+            return m.split(":", 1)[1].strip().lstrip("*").strip()
+    return "unknown"
+
+
 def build_files_list(anon_sources: list[tuple[str, str]]) -> str:
     lines: list[str] = []
     for basename, anon_path in anon_sources:
@@ -133,6 +142,9 @@ def build_files_list(anon_sources: list[tuple[str, str]]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--convention", required=True, type=Path)
+    ap.add_argument("--convention-version", default=None,
+                    help="Convention version string (e.g. '1.5'). Replaces {CONVENTION_VERSION} in the prompt. "
+                         "Derived from the convention doc if omitted.")
     ap.add_argument(
         "--anon-source",
         action="append",
@@ -153,11 +165,18 @@ def main() -> int:
             return 2
         anon_sources.append((basename, anon_path))
 
+    # Resolve convention version: explicit flag wins; fall back to parsing the doc header.
+    if args.convention_version:
+        convention_version = args.convention_version
+    else:
+        convention_version = _parse_convention_version(args.convention)
+
     convention = args.convention.read_text()
     files_list = build_files_list(anon_sources)
 
     body = (
         PROMPT_TEMPLATE
+        .replace("{CONVENTION_VERSION}", convention_version)
         .replace("__CONVENTION_DOC__", convention)
         .replace("__FILES_LIST__", files_list)
     )

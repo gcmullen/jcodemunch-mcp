@@ -235,6 +235,7 @@ def cmd_prepare(args) -> int:
         rc, _, err = run_cmd([
             "python3", str(TOOLS / "build_prompt.py"),
             "--convention", str(convention_path),
+            "--convention-version", convention_version,
             "--out", str(prompt_path),
             *anon_args,
         ])
