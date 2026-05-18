@@ -1680,6 +1680,23 @@ namespace eval ::jcm::bridge {
         visibility variable window
     } { set _kept_ensemble_subs(tkwait:$_sub) 1 }
 
+    # tk — Tk [tk.htm]
+    foreach _sub {
+        appname caret inactive scaling useinputmethods windowingsystem
+    } { set _kept_ensemble_subs(tk:$_sub) 1 }
+
+    # clipboard — Tk [clipboard.htm]
+    foreach _sub {
+        append clear get
+    } { set _kept_ensemble_subs(clipboard:$_sub) 1 }
+
+    # interp — Tcl [interp.htm]
+    foreach _sub {
+        alias aliases bgerror create delete eval exists expose hide
+        hidden invokehidden issafe limit marktrusted recursionlimit
+        share slaves target transfer
+    } { set _kept_ensemble_subs(interp:$_sub) 1 }
+
     # iTcl delete — [ItclCmd/index]
     foreach _sub {
         object class namespace
@@ -1694,7 +1711,7 @@ namespace eval ::jcm::bridge {
 # form per convention §5.10 (v1.3 P3.1) when TYPE is a literal.
 proc ::jcm::bridge::_maybe_two_word_ensemble {name cmd_text} {
     variable _kept_ensemble_subs
-    if {$name ni {grid pack place wm winfo image font delete tkwait}} {
+    if {$name ni {grid pack place wm winfo image font delete tkwait tk clipboard interp}} {
         return $name
     }
     set sub [_nth_word_of_cmd $cmd_text 1]
