@@ -73,6 +73,17 @@ proc ::jcm::dsl::walker::_apply_outer_row {row cmd_text abs_start abs_end parent
                 set found_idx [_find_class_by_qname $sym_name]
             }
             if {$found_idx < 0} {
+                # G9 — augment target is dynamic (e.g. `oo::define $class {...}`)
+                # or refers to a class declared in another file the bridge hasn't
+                # seen yet. Emit the augment command itself ($first, e.g.
+                # "::oo::define") as a qualified callee on the parent so the
+                # call edge is recorded. Body is NOT walked — directives inside
+                # would attribute to the wrong scope without a known augmented
+                # class.
+                namespace upvar ::jcm::bridge line_offsets line_offsets
+                set line [::jcm::bridge::char_offset_to_line $line_offsets $abs_start]
+                ::jcm::bridge::_add_callee_to_parent $parent_sym_idx \
+                    [::jcm::bridge::_make_static_or_qualified_entry $first $line]
                 return 1
             }
             namespace upvar ::jcm::bridge symbols symbols
