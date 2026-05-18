@@ -207,7 +207,14 @@ proc ::jcm::bridge::_append_symbol {sym} {
     set kind [dict get $sym kind]
     set qname [dict get $sym qualified_name]
     set keywords [dict get $sym keywords]
-    set is_decl [expr {"method_decl" in $keywords || "class_proc_decl" in $keywords}]
+    # Body-bearing marker: SUBTABLE_A row 109 ({body "" 3 lambda method
+    # {out_of_line 1}}) and equivalent rows tag out-of-line method
+    # definitions with the "out_of_line" keyword. Inline declarations
+    # (`public method foo` without a body) do NOT carry this keyword.
+    # Out-of-line body must replace inline declaration when both exist
+    # for the same qname — the body has the real implementation +
+    # callees; the inline form is just a forward-declaration slot.
+    set is_body [expr {"out_of_line" in $keywords}]
     set dedup_kind ""
     if {$kind eq "method"} {
         set dedup_kind method
@@ -219,18 +226,20 @@ proc ::jcm::bridge::_append_symbol {sym} {
         set dedup_kind function
     }
     if {$dedup_kind ne "" && [info exists method_registry($qname)]} {
-        lassign $method_registry($qname) prev_pos prev_is_decl prev_kind
-        if {$prev_is_decl && !$is_decl} {
+        lassign $method_registry($qname) prev_pos prev_is_body prev_kind
+        if {$is_body && !$prev_is_body} {
+            # Out-of-line body wins — replace inline declaration in place.
             lset symbols $prev_pos $sym
-            set method_registry($qname) [list $prev_pos 0 $prev_kind]
+            set method_registry($qname) [list $prev_pos 1 $prev_kind]
+            return $prev_pos
         }
-        # Else: keep first body / drop duplicate decl.
+        # Else: keep first (already-stored body OR duplicate declaration).
         return -1
     }
     lappend symbols $sym
     set pos [expr {[llength $symbols] - 1}]
     if {$dedup_kind ne ""} {
-        set method_registry($qname) [list $pos $is_decl $dedup_kind]
+        set method_registry($qname) [list $pos $is_body $dedup_kind]
     }
     return $pos
 }
