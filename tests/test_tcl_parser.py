@@ -2488,3 +2488,94 @@ class TestCallbackEmission:
                 f"callback method {method!r} missing from call_references "
                 f"(backward-compat surface): {target.call_references!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.X — convention §5.1 static / §5.2 qualified callees emission
+#
+# The walker emits kind=static (literal first word, no `::`) and
+# kind=qualified (literal first word, contains `::`) records into the
+# per-call-site callees list.  This closes the dominant strict-diff
+# recall gap surfaced in P5.2.8: 1140 + 270 = 1410 of the 1765 strict
+# misses were these two kinds (80% of the gap).  After 5.2.X strict
+# recall jumped from 0.2609 to 0.7182.
+# ---------------------------------------------------------------------------
+
+
+STATIC_QUALIFIED_FIXTURE = '''\
+proc test_static_qualified {x} {
+    plain_call $x
+    helper $x $x
+    ::ns::qualified $x
+    ::DCS::ComponentGate $x
+    msgcat::mc some_key
+    grid rowconfigure $x 0 -weight 1
+    winfo exists $x
+    image create photo myimg
+    return $x
+}
+'''
+
+
+class TestStaticAndQualifiedEmission:
+    @pytest.fixture
+    def callees(self):
+        symbols = parse_file(STATIC_QUALIFIED_FIXTURE, "sq.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "test_static_qualified")
+        return target.callees
+
+    @pytest.mark.parametrize("name", [
+        "plain_call", "helper",
+    ])
+    def test_bare_literal_emits_kind_static(self, callees, name):
+        records = [c for c in callees if c.get("name") == name]
+        assert len(records) == 1, (
+            f"expected one callees record for static {name!r}; got {records!r}"
+        )
+        assert records[0]["kind"] == "static", (
+            f"bare literal {name!r} must emit kind=static; got "
+            f"{records[0]['kind']!r}"
+        )
+
+    @pytest.mark.parametrize("name", [
+        "::ns::qualified",
+        "::DCS::ComponentGate",
+        "msgcat::mc",
+    ])
+    def test_qualified_name_emits_kind_qualified(self, callees, name):
+        records = [c for c in callees if c.get("name") == name]
+        assert len(records) == 1, (
+            f"expected one callees record for qualified {name!r}; got {records!r}"
+        )
+        assert records[0]["kind"] == "qualified", (
+            f"qualified name {name!r} must emit kind=qualified; got "
+            f"{records[0]['kind']!r}"
+        )
+
+    @pytest.mark.parametrize("name", [
+        "grid rowconfigure",
+        "winfo exists",
+        "image create photo",
+    ])
+    def test_kept_ensemble_phrase_emits_kind_static(self, callees, name):
+        """Convention §7.5 carve-out: kept Tk ensembles use kind=static
+        (the `ensemble` kind is reserved for Tier 2 ensembles whose
+        default surfacing is opt-in)."""
+        records = [c for c in callees if c.get("name") == name]
+        assert len(records) == 1, (
+            f"expected one callees record for kept-ensemble {name!r}; got "
+            f"{records!r}"
+        )
+        assert records[0]["kind"] == "static", (
+            f"kept ensemble {name!r} must emit kind=static per §7.5; got "
+            f"{records[0]['kind']!r}"
+        )
+
+    def test_every_call_has_line_field(self, callees):
+        """Strict diff requires per-call-site line for ±2 tolerance match."""
+        for c in callees:
+            assert "line" in c, f"callees record missing line: {c!r}"
+            assert isinstance(c["line"], int), (
+                f"callees line must be int; got {type(c['line']).__name__}: {c!r}"
+            )
+            assert c["line"] >= 1, f"callees line should be 1-based: {c!r}"

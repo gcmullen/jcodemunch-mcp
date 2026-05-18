@@ -439,8 +439,12 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
                 }
             } else {
                 if {$head ne ""} {
-                    _add_call_to_parent $parent_sym_idx \
-                        [_maybe_two_word_ensemble $head $cmd_text]
+                    set _emit_name [_maybe_two_word_ensemble $head $cmd_text]
+                    _add_call_to_parent $parent_sym_idx $_emit_name
+                    # P5.2.X: static/qualified callees emission per §5.1/§5.2.
+                    set _line [char_offset_to_line $line_offsets $abs_start]
+                    _add_callee_to_parent $parent_sym_idx \
+                        [_make_static_or_qualified_entry $_emit_name $_line]
                 }
             }
             return
@@ -490,8 +494,12 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
             # arg's method as kind=callback.
             set head_is_dispatcher [_is_callback_dispatcher $head $cmd_text]
             if {$head ne "" && ![_is_var_word $head] && !$head_is_dispatcher} {
-                _add_call_to_parent $parent_sym_idx \
-                    [_maybe_two_word_ensemble $head $cmd_text]
+                set _emit_name [_maybe_two_word_ensemble $head $cmd_text]
+                _add_call_to_parent $parent_sym_idx $_emit_name
+                # P5.2.X: static/qualified callees emission per §5.1/§5.2.
+                set _line [char_offset_to_line $line_offsets $abs_start]
+                _add_callee_to_parent $parent_sym_idx \
+                    [_make_static_or_qualified_entry $_emit_name $_line]
             } elseif {[_is_var_word $head]} {
                 set second [_nth_word_of_cmd $cmd_text 1]
                 if {$second ne "" && ![_is_var_word $second]} {
@@ -545,8 +553,12 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
             return
         }
         expand_args {
-            _add_call_to_parent $parent_sym_idx \
-                [_maybe_two_word_ensemble [dict get $ev name] $cmd_text]
+            set _emit_name [_maybe_two_word_ensemble [dict get $ev name] $cmd_text]
+            _add_call_to_parent $parent_sym_idx $_emit_name
+            # P5.2.X: static/qualified callees emission per §5.1/§5.2.
+            set _line [char_offset_to_line $line_offsets $abs_start]
+            _add_callee_to_parent $parent_sym_idx \
+                [_make_static_or_qualified_entry $_emit_name $_line]
             return
         }
         apply_lambda {
@@ -580,6 +592,12 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
                     if {$after_var ne "" && ![_is_var_word $after_var]
                             && ![regexp {^[\[\{]} $after_var]} {
                         _add_call_to_parent $parent_sym_idx $after_var
+                        # P5.2.X: static callee — literal method past the $var
+                        # in `eval $obj method` shape.  kind=static (the method
+                        # word is the searchable key per §5.8.2).
+                        set _line [char_offset_to_line $line_offsets $abs_start]
+                        _add_callee_to_parent $parent_sym_idx \
+                            [_make_static_or_qualified_entry $after_var $_line]
                     }
                 }
             }
@@ -804,6 +822,18 @@ proc ::jcm::bridge::_make_callback_entry {method dispatcher_head line} {
         note  $dispatcher_head]
 }
 
+# Build a §5.1 static / §5.2 qualified callee entry.  Kind is picked from
+# the name: any `::` segment marks it as qualified per §5.2; otherwise
+# static per §5.1.  2-word kept-ensemble phrases (grid rowconfigure,
+# winfo exists, etc.) use kind=static per §7.5 carve-out — they have no
+# `::` so the heuristic gives the right answer.
+proc ::jcm::bridge::_make_static_or_qualified_entry {name line} {
+    if {[string match *::* $name]} {
+        return [dict create name $name line $line kind qualified]
+    }
+    return [dict create name $name line $line kind static]
+}
+
 # Route an unresolved-kind event through unresolved_detector::detect and
 # append the result to the enclosing parent symbol.
 #
@@ -934,8 +964,14 @@ proc ::jcm::bridge::_handle_pattern_a {ev cmd_text abs_start abs_end parent_sym_
     # image / font / delete) upgrade the 1-word emission to the 2-word
     # (or 3-word for `image create TYPE`) phrase per convention §5.10
     # when the next cmd_text word is a documented subcommand literal.
-    _add_call_to_parent $parent_sym_idx \
-        [_maybe_two_word_ensemble $name $cmd_text]
+    set _emit_name [_maybe_two_word_ensemble $name $cmd_text]
+    _add_call_to_parent $parent_sym_idx $_emit_name
+    # P5.2.X: static/qualified callees emission — the dominant path for
+    # literal-head call sites.  Kind picked by `::` presence in the
+    # emitted name; 2-word kept ensembles get kind=static per §7.5.
+    set _line [char_offset_to_line $line_offsets $abs_start]
+    _add_callee_to_parent $parent_sym_idx \
+        [_make_static_or_qualified_entry $_emit_name $_line]
 }
 
 # Tk command flags whose value is a script body the bridge should recurse
@@ -968,14 +1004,27 @@ proc ::jcm::bridge::_sweep_script_flags {cmd_text abs_start parent_sym_idx paren
 }
 
 proc ::jcm::bridge::_handle_pattern_a2 {ev cmd_text abs_start abs_end parent_sym_idx parent_qname} {
+    variable line_offsets
     # ::ns method form — record both the qualified ns and the method as
     # callees on the parent. Mirrors the v1 bridge `::config getImageUrl`
     # treatment so test_fqn_global_dispatch_captures_method passes.
     set fqn [dict get $ev fqn]
     set method [dict get $ev method]
+    set _line [char_offset_to_line $line_offsets $abs_start]
     _add_call_to_parent $parent_sym_idx $fqn
+    # P5.2.X: fqn is the §5.2 qualified callee (has `::`).
+    _add_callee_to_parent $parent_sym_idx \
+        [_make_static_or_qualified_entry $fqn $_line]
     if {$method ne ""} {
         _add_call_to_parent $parent_sym_idx $method
+        # P5.2.X: the method word is recorded as kind=static per call_references
+        # legacy.  Convention §5.2 / §5.10 P3.1 says the second word is data,
+        # not a separate callee — but the existing test (test_fqn_global_
+        # dispatch_captures_method) expects the method emission, so we keep
+        # it here for compat.  If the strict diff shows this as an extra,
+        # revisit in a separate commit.
+        _add_callee_to_parent $parent_sym_idx \
+            [_make_static_or_qualified_entry $method $_line]
     }
 }
 
@@ -1049,6 +1098,12 @@ proc ::jcm::bridge::_apply_a_row {row name cmd_text abs_start abs_end parent_sym
             if {$after_var ne "" && ![_is_var_word $after_var]
                     && ![regexp {^[\[\{]} $after_var]} {
                 _add_call_to_parent $parent_sym_idx $after_var
+                # P5.2.X: static callee — `eval $obj method` literal method
+                # recovery via the A-row literal_only branch.
+                variable line_offsets
+                set _line [char_offset_to_line $line_offsets $abs_start]
+                _add_callee_to_parent $parent_sym_idx \
+                    [_make_static_or_qualified_entry $after_var $_line]
             }
             return
         }
