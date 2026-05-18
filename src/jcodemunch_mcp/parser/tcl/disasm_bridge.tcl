@@ -29,6 +29,8 @@ source [file join [file dirname [info script]] compute_body_base.tcl]
 source [file join [file dirname [info script]] unresolved_detector.tcl]
 source [file join [file dirname [info script]] pragma_scanner.tcl]
 source [file join [file dirname [info script]] bridge_postpasses.tcl]
+source [file join [file dirname [info script]] dsl_annotations.tcl]
+source [file join [file dirname [info script]] dsl_walker.tcl]
 source [file join [file dirname [info script]] disasm_bridge_json.tcl]
 
 namespace eval ::jcm::bridge {
@@ -892,6 +894,16 @@ proc ::jcm::bridge::_handle_pattern_a {ev cmd_text abs_start abs_end parent_sym_
             _add_callee_to_parent $parent_sym_idx \
                 [_make_callback_entry $_cb_method $name $_cb_line]
         }
+    }
+
+    # 5.2a.0: DSL walker pre-pass. Sibling to SUBTABLE_C / SUBTABLE_A.
+    # Returns 1 when a Tcl-dev-maintained class DSL annotation owns this
+    # command; we then return immediately to skip the generic dispatch.
+    # Returns 0 to fall through (the common case; always the case at
+    # 5.2a.0 since the annotations table is empty).
+    if {[::jcm::dsl::walker::try_dispatch $ev $cmd_text $abs_start $abs_end \
+            $parent_sym_idx $parent_qname]} {
+        return
     }
 
     # Sub-table C first — schema-only handlers (inherit/superclass/
