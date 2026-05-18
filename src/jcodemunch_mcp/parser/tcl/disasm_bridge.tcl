@@ -697,6 +697,68 @@ proc ::jcm::bridge::_make_method_dispatch_entry {method receiver_hint line} {
         note           "$receiver_hint $method"]
 }
 
+# G14 helper — is the bare name in the Tier 1/2/3 denylist? Mirrors the
+# postpass filter so qualified-stdlib pairs like `::set var val` don't
+# generate spurious `::set var` + `var` emissions.
+proc ::jcm::bridge::_g14_is_denylisted {bare} {
+    # Tier 1 control flow + Tier 2 data ops + Tier 3 I/O
+    return [expr {$bare in {
+        if else elseif while for foreach lmap time switch
+        catch try on trap finally return break continue yield yieldto
+        set incr unset lappend lassign lset lreplace llength lrange
+        lsearch lsort lindex linsert lrepeat lreverse list split join
+        format scan expr regexp regsub subst concat eof seek tell flush
+        global variable
+        string dict info array clock chan file binary namespace package encoding
+        puts gets read open close update vwait error throw
+    }}]
+}
+
+# G14 — pattern_a path: when first word is qualified (`::ns...` or contains
+# `::`) AND second word is a bare identifier AND the bare-name isn't in the
+# Tier 1/2/3 denylist, emit a 2-word qualified callee + method_dispatch pair
+# and return 1 (caller should skip the bare-static emit). Returns 0 otherwise.
+proc ::jcm::bridge::_g14_qualified_method_dispatch_pair {name cmd_text parent_sym_idx abs_start} {
+    variable line_offsets
+    # Predicate 1: first word is a `::` prefixed single-segment global name
+    # (e.g. `::mediator`, `::config`).  Multi-segment qualified names like
+    # `msgcat::mc`, `Widget::define`, `BWidget::grab`, `::cron::task` are
+    # plain proc calls and must NOT trigger G14 — they arrive as pattern_a
+    # whereas true single-segment globals arrive as pattern_a2 and are
+    # handled there; this guard prevents double-firing.
+    if {[string index $name 0] ne ":" || [string index $name 1] ne ":"} {
+        return 0
+    }
+    set _parts [lsearch -all -inline -not [split $name "::"] ""]
+    if {[llength $_parts] != 1} { return 0 }
+    # Predicate 2: bare name not in Tier 1/2/3 denylist
+    set bare [lindex $_parts 0]
+    if {[_g14_is_denylisted $bare]} { return 0 }
+    # Predicate 3: second word is a bare identifier (not var, bracket, brace,
+    # or space-containing string — quoted strings arrive without quotes after
+    # list-parsing so space-check catches "SELECT 1" -> `SELECT 1`)
+    set second [_nth_word_of_cmd $cmd_text 1]
+    if {$second eq ""} { return 0 }
+    if {[_is_var_word $second]} { return 0 }
+    set _s0 [string index $second 0]
+    if {$_s0 eq "\[" || $_s0 eq "\{"} { return 0 }
+    if {[string first " " $second] >= 0} { return 0 }
+    if {[string index $second 0] eq "-"} { return 0 }
+    if {[regexp {^[0-9]+$} $second]} { return 0 }
+    # All predicates met — emit 2-word qualified + method_dispatch pair
+    set two_word "$name $second"
+    set line [char_offset_to_line $line_offsets $abs_start]
+    # call_references: 1-word name for backward compat
+    _add_call_to_parent $parent_sym_idx $name
+    # 2-word qualified callee
+    _add_callee_to_parent $parent_sym_idx \
+        [_make_static_or_qualified_entry $two_word $line]
+    # method_dispatch callee with qualified receiver_hint
+    _add_callee_to_parent $parent_sym_idx \
+        [_make_method_dispatch_entry $second $name $line]
+    return 1
+}
+
 # P5.2.7 — convention §6.9 / §6.12 callback dispatcher recognition.
 # bind / after / fileevent / `trace add ...` are NOT callees themselves;
 # only the SCRIPT argument's first method word is recorded as a
@@ -980,6 +1042,14 @@ proc ::jcm::bridge::_handle_pattern_a {ev cmd_text abs_start abs_end parent_sym_
     # bare-name emission per convention §6.9.
     if {$is_cb_dispatcher} { return }
 
+    # G14 — qualified static receiver method-dispatch pair (pattern_a path).
+    # Applies when the head is qualified and the second word is a bare
+    # identifier. Emits 2-word qualified callee + method_dispatch and returns,
+    # skipping the single-qualified bare-static emit below.
+    if {[_g14_qualified_method_dispatch_pair $name $cmd_text $parent_sym_idx $abs_start]} {
+        return
+    }
+
     # Otherwise — treat the head as a callee on the parent.
     # P5.2.5: for kept-ensemble dispatchers (grid / pack / wm / winfo /
     # image / font / delete) upgrade the 1-word emission to the 2-word
@@ -1026,24 +1096,55 @@ proc ::jcm::bridge::_sweep_script_flags {cmd_text abs_start parent_sym_idx paren
 
 proc ::jcm::bridge::_handle_pattern_a2 {ev cmd_text abs_start abs_end parent_sym_idx parent_qname} {
     variable line_offsets
-    # ::ns method form — record both the qualified ns and the method as
-    # callees on the parent. Mirrors the v1 bridge `::config getImageUrl`
-    # treatment so test_fqn_global_dispatch_captures_method passes.
-    set fqn [dict get $ev fqn]
+    # ::ns method form — the walker already parsed fqn + method from the
+    # bytecode, so G14 can fire directly without re-tokenizing cmd_text.
+    set fqn    [dict get $ev fqn]
     set method [dict get $ev method]
-    set _line [char_offset_to_line $line_offsets $abs_start]
+    set _line  [char_offset_to_line $line_offsets $abs_start]
+
+    # G14 — global-object dispatch: applies ONLY when fqn is a `::` prefixed
+    # single-segment name (e.g. `::mediator`, `::config`).  Multi-segment
+    # qualified names like `Widget::define`, `BWidget::grab`, `::cron::task`
+    # are plain proc calls and must NOT trigger G14.
+    # When applicable, emit THREE callees to cover both annotator forms in
+    # corrected gold (both 1-word and 2-word entries may be canonical):
+    #   1. 1-word qualified fqn   (§5.2; gold A_correct form)
+    #   2. 2-word qualified fqn+method (gold B_correct/A_correct form)
+    #   3. method_dispatch with receiver_hint=fqn (§5.3 extension)
+    set _fqn_parts [lsearch -all -inline -not [split $fqn "::"] ""]
+    set _is_global_single [expr {
+        [string index $fqn 0] eq ":" &&
+        [string index $fqn 1] eq ":" &&
+        [llength $_fqn_parts] == 1
+    }]
+    if {$_is_global_single && $method ne "" \
+            && ![_g14_is_denylisted $method] \
+            && [string index $method 0] ne "-"} {
+        set two_word "$fqn $method"
+        # call_references: both fqn and method for backward compat
+        _add_call_to_parent $parent_sym_idx $fqn
+        _add_call_to_parent $parent_sym_idx $method
+        # 1-word qualified callee (§5.2)
+        _add_callee_to_parent $parent_sym_idx \
+            [_make_static_or_qualified_entry $fqn $_line]
+        # 2-word qualified callee
+        _add_callee_to_parent $parent_sym_idx \
+            [_make_static_or_qualified_entry $two_word $_line]
+        # method_dispatch callee with qualified receiver_hint
+        _add_callee_to_parent $parent_sym_idx \
+            [_make_method_dispatch_entry $method $fqn $_line]
+        return
+    }
+
+    # Fallback (method is empty, denylisted, or option flag): record fqn only,
+    # plus method as kind=static for legacy compat
+    # (test_fqn_global_dispatch_captures_method).
     _add_call_to_parent $parent_sym_idx $fqn
     # P5.2.X: fqn is the §5.2 qualified callee (has `::`).
     _add_callee_to_parent $parent_sym_idx \
         [_make_static_or_qualified_entry $fqn $_line]
     if {$method ne ""} {
         _add_call_to_parent $parent_sym_idx $method
-        # P5.2.X: the method word is recorded as kind=static per call_references
-        # legacy.  Convention §5.2 / §5.10 P3.1 says the second word is data,
-        # not a separate callee — but the existing test (test_fqn_global_
-        # dispatch_captures_method) expects the method emission, so we keep
-        # it here for compat.  If the strict diff shows this as an extra,
-        # revisit in a separate commit.
         _add_callee_to_parent $parent_sym_idx \
             [_make_static_or_qualified_entry $method $_line]
     }

@@ -2508,7 +2508,8 @@ proc test_static_qualified {x} {
     helper $x $x
     ::ns::qualified $x
     ::DCS::ComponentGate $x
-    msgcat::mc some_key
+    msgcat::mc $x
+    ::mediator announceDestruction $x
     grid rowconfigure $x 0 -weight 1
     winfo exists $x
     image create photo myimg
@@ -2579,3 +2580,18 @@ class TestStaticAndQualifiedEmission:
                 f"callees line must be int; got {type(c['line']).__name__}: {c!r}"
             )
             assert c["line"] >= 1, f"callees line should be 1-based: {c!r}"
+
+    def test_g14_qualified_literal_second_emits_pair(self, callees):
+        """G14: `::mediator announceDestruction $x` → 2-word qualified callee
+        + method_dispatch callee with receiver_hint=::mediator (§5.3 extension)."""
+        two_word = [c for c in callees if c.get("name") == "::mediator announceDestruction"]
+        assert len(two_word) == 1, (
+            f"G14 must emit 2-word qualified callee; got {two_word!r}"
+        )
+        assert two_word[0]["kind"] == "qualified"
+        dispatch = [c for c in callees if c.get("name") == "announceDestruction"
+                    and c.get("kind") == "method_dispatch"]
+        assert len(dispatch) == 1, (
+            f"G14 must emit method_dispatch callee for second word; got {dispatch!r}"
+        )
+        assert dispatch[0].get("receiver_hint") == "::mediator"

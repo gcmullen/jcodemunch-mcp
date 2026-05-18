@@ -224,31 +224,30 @@ combined 5.2a.6 triage view.
   formalize and bridge can match. If only some files → those gold files
   need re-arbitration.
 
-### G14 — Pattern A: qualified static receiver method-dispatch (`::ns method args`)
-- **Where:** Confirmed pattern in DcsWidgets (`::mediator
-  announceDestruction $this`, ~19 misses) and BWidget
-  (`BWidget::grab release $path`, `BWidget::focus release $path`, ~4
-  misses). Likely present in other corpora wherever code uses a USER
-  namespace as a static receiver for method-style dispatch.
-- **Today's bridge behavior:** When first word is qualified (e.g.
-  `::mediator`), the bare-static-emit branch at `_handle_pattern_a:967-974`
-  emits ONE qualified callee (`::mediator`). Second word (e.g.
-  `announceDestruction`) is dropped.
-- **Gold expectation:** TWO callees at the same line: a 2-word qualified
-  callee (`::mediator announceDestruction`) AND a `method_dispatch` callee
-  with `name=announceDestruction`, `receiver_hint=::mediator`. Mirrors
-  convention §5.3 method_dispatch for `$obj method` but with a static
-  qualified receiver instead of a variable receiver.
-- **Generic fix:** ~15 LOC in `_handle_pattern_a`'s bare-static-emit
-  branch. Predicate: bare-name (qualified-name stripped of namespace
-  prefix) not in Tier 2 denylist + first word starts with `::` or
-  contains `::` + second word is a literal method name. Emit BOTH the
-  2-word qualified and the method_dispatch.
-- **Estimated lift:** ~19 (DcsWidgets) + ~4 (BWidget) + unknown other
-  corpora = ~23-30+ misses recovered. Aggregate ≈ +0.01-0.02.
-- **False-positive guard:** Tier 1/2/3 denylist consultation prevents
-  `::set var val` style stdlib-qualified spurious emission.
-- **Disposition:** **5.6 per-pattern bridge fix**. Executor-ready.
+### G14 — Pattern A: qualified static receiver method-dispatch — LANDED
+- **Where:** DcsWidgets (`::mediator announceDestruction $this`) and
+  BluIceWidgets equivalents.
+- **Resolution:** Added `_g14_qualified_method_dispatch_pair` and
+  `_g14_is_denylisted` helpers to `disasm_bridge.tcl`. Predicate narrowed
+  after initial over-emission discovery: fires ONLY for `::`-prefixed
+  **single-segment** global names (e.g. `::mediator`, `::log`) — NOT for
+  multi-segment qualified procs like `::cron::task set` (which gold
+  treats as regular qualified proc call with literal args, not as method
+  dispatch). When predicate fires, emits both the 2-word qualified
+  callee (`::mediator announceDestruction`) AND a method_dispatch callee
+  with `receiver_hint=::mediator`. Tier 1/2/3 denylist consultation
+  prevents `::set var val` style false positives. Wired into both
+  `_handle_pattern_a` and `_handle_pattern_a2`.
+- **Lift:**
+  - bluice-DcsWidgets: 0.7308 → 0.8308 (+10.0pp)
+  - bluice-BluIceWidgets: 0.9097 → 0.9376 (+2.79pp)
+  - aggregate: 0.8519 → 0.8674 (+1.55pp)
+- **Trade-off accepted:** The narrow predicate misses the
+  `BWidget::grab release` shape (relative qualified, no leading `::`),
+  which would require a per-namespace declaration registry to
+  disambiguate from regular procs like `Widget::cget $path -opt`. That
+  case remains under G13 / convention v1.5 work.
+- **Status:** CLOSED.
 
 ---
 
