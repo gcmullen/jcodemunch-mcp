@@ -90,6 +90,17 @@ namespace eval ::jcm::bridge {
         source inherit superclass auto_load auto_import tm
     } { set _tier_deny_set($_n) 1 }
 
+    # §5.5 visibility modifiers — public / private / protected are
+    # method-declaration modifiers, NOT callees.  The disasm walker
+    # sees the first word of `public method foo args body` and emits
+    # `public` as a static callee on the enclosing class; the
+    # convention says visibility prefixes don't surface as callees
+    # (only the `method` / `proc` / `variable` Tier 4 declarations
+    # produce records).  Net: filter all three modifiers.
+    foreach _n {
+        public private protected
+    } { set _tier_deny_set($_n) 1 }
+
     unset _n
 }
 

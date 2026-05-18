@@ -1973,3 +1973,66 @@ class TestQualifiedNamePreservation:
             f"qualified dispatcher call did not preserve :: prefix; "
             f"call_references = {target.call_references!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.3 — convention §5.5 visibility-prefix recognition
+#
+# public / private / protected are method-declaration modifiers, NOT
+# callees.  The bytecode walker sees `public method foo args body` and
+# emits `public` as a static callee on the enclosing class; the filter
+# post-pass must drop these three modifier words.
+# Per BRIDGE_VS_GOLD_VALIDATION §4a these accounted for ~42 spurious
+# extras (private 24, public 13, protected 5).
+# ---------------------------------------------------------------------------
+
+
+VISIBILITY_PREFIX_FIXTURE = '''\
+itcl::class Widget {
+    public method render {win} {
+        ::jcm::log "rendering"
+        ::jcm::do_work $win
+        ::jcm::another_call
+    }
+    private method _setup {} {
+        ::jcm::log "setting up"
+        ::jcm::init_internals
+    }
+    protected method _teardown {} {
+        ::jcm::log "tearing down"
+        ::jcm::cleanup_resources
+    }
+}
+'''
+
+
+class TestVisibilityPrefixFilter:
+    @pytest.fixture
+    def widget_symbol(self):
+        symbols = parse_file(VISIBILITY_PREFIX_FIXTURE, "vis.tcl", "tcl")
+        classes = [s for s in symbols if s.name == "Widget" and s.kind == "class"]
+        assert len(classes) == 1, (
+            f"expected one Widget class symbol; got "
+            f"{[s.qualified_name for s in symbols]}"
+        )
+        return classes[0]
+
+    @pytest.mark.parametrize("modifier", ["public", "private", "protected"])
+    def test_visibility_modifier_not_in_class_call_references(
+        self, widget_symbol, modifier
+    ):
+        assert modifier not in widget_symbol.call_references, (
+            f"§5.5 visibility modifier {modifier!r} leaked into the "
+            f"enclosing class's call_references: "
+            f"{widget_symbol.call_references!r}"
+        )
+
+    def test_visibility_modifier_not_in_any_symbol_call_references(self):
+        symbols = parse_file(VISIBILITY_PREFIX_FIXTURE, "vis.tcl", "tcl")
+        for s in symbols:
+            for modifier in ("public", "private", "protected"):
+                assert modifier not in s.call_references, (
+                    f"§5.5 visibility modifier {modifier!r} leaked into "
+                    f"{s.qualified_name}.call_references = "
+                    f"{s.call_references!r}"
+                )
