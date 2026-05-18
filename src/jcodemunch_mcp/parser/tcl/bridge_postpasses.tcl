@@ -101,6 +101,29 @@ namespace eval ::jcm::bridge {
         public private protected
     } { set _tier_deny_set($_n) 1 }
 
+    # §6.8 expr operators — comparison, logical, arithmetic, bitwise,
+    # ternary, and named string/boolean operators that can leak from
+    # the walker's expr-bracket operand expressions.  Convention §6.8
+    # says math-function calls (tcl::mathfunc::*) are OPTIONAL records,
+    # operators themselves are NOT callees.  Bridge today emits a small
+    # set of operator tokens as static callees (BRIDGE_VS_GOLD §4a:
+    # ne x8, > x5, == x4, && x4, eq x3, != x2, < x2, >= x1); filter
+    # the full operator vocabulary so future expressions don't introduce
+    # new operator leakage.
+    # NOTE: `tailcall` and `delete` ARE on the convention's deferred-
+    # decisions list (§7.5 disposition matrix: DEFER to v1.5 spec track
+    # for tailcall; 5.2.5 2-word ensemble emission will resolve `delete`
+    # by upgrading the 1-word emission to `delete object` / `delete class`
+    # / `delete namespace`).  Neither is filtered here.
+    foreach _n {
+        == != < > <= >=
+        eq ne lt gt le ge in ni
+        && || ! and or not xor
+        + - * / % **
+        & | ^ ~ << >>
+        ? :
+    } { set _tier_deny_set($_n) 1 }
+
     unset _n
 }
 

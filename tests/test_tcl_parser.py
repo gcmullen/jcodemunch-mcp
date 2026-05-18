@@ -2036,3 +2036,86 @@ class TestVisibilityPrefixFilter:
                     f"{s.qualified_name}.call_references = "
                     f"{s.call_references!r}"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.4 — convention §6.8 operator exclusion
+#
+# Tcl expr operators (`==`, `!=`, `<`, `>`, `eq`, `ne`, `&&`, `||`, etc.)
+# can leak from the walker's expr-bracket operand expressions and end up
+# as static callees.  Convention §6.8 says only bracketed command
+# substitutions inside expr produce callee records; operators are NOT
+# callees.  Per BRIDGE_VS_GOLD_VALIDATION §4a ~25 operator-token extras
+# surfaced in the v1.3 corpus run.
+# ---------------------------------------------------------------------------
+
+
+EXPR_OPERATORS_FIXTURE = '''\
+proc compare_things {a b c d e} {
+    # Comparison operators
+    if {$a == $b} { return 1 }
+    if {$a != $b} { return 2 }
+    if {$a <  $b} { return 3 }
+    if {$a >  $b} { return 4 }
+    if {$a <= $b} { return 5 }
+    if {$a >= $b} { return 6 }
+    # String operators
+    if {$a eq "x"} { return 7 }
+    if {$a ne "y"} { return 8 }
+    # Logical operators
+    if {$a && $b} { return 9 }
+    if {$a || $b} { return 10 }
+    if {!$a}      { return 11 }
+    # Arithmetic in expr brackets
+    set s [expr {$a + $b - $c * $d / $e}]
+    set t [expr {$a % $b}]
+    # Bitwise
+    set u [expr {$a & $b | $c ^ $d}]
+    set v [expr {$a << 2 >> 1}]
+    # Ternary
+    set w [expr {$a > $b ? $c : $d}]
+    return $s
+}
+'''
+
+
+_FULL_OPERATOR_SET = [
+    # Comparison
+    "==", "!=", "<", ">", "<=", ">=",
+    # Named comparison / string
+    "eq", "ne", "lt", "gt", "le", "ge", "in", "ni",
+    # Logical
+    "&&", "||", "!", "and", "or", "not", "xor",
+    # Arithmetic
+    "+", "-", "*", "/", "%", "**",
+    # Bitwise
+    "&", "|", "^", "~", "<<", ">>",
+    # Ternary
+    "?", ":",
+]
+
+
+class TestExprOperatorExclusion:
+    @pytest.fixture
+    def operator_symbol(self):
+        symbols = parse_file(EXPR_OPERATORS_FIXTURE, "ops.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "compare_things")
+        return target
+
+    @pytest.mark.parametrize("op", _FULL_OPERATOR_SET)
+    def test_operator_not_in_call_references(self, operator_symbol, op):
+        assert op not in operator_symbol.call_references, (
+            f"§6.8 operator {op!r} leaked into call_references: "
+            f"{operator_symbol.call_references!r}"
+        )
+
+    def test_no_operator_in_any_symbol(self):
+        symbols = parse_file(EXPR_OPERATORS_FIXTURE, "ops.tcl", "tcl")
+        leaked = {}
+        for s in symbols:
+            for c in s.call_references:
+                if c in _FULL_OPERATOR_SET:
+                    leaked.setdefault(s.qualified_name, []).append(c)
+        assert not leaked, (
+            f"§6.8 operators leaked across symbols: {leaked!r}"
+        )
