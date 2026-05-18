@@ -433,7 +433,10 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
                     _add_call_to_parent $parent_sym_idx $second
                 }
             } else {
-                if {$head ne ""} { _add_call_to_parent $parent_sym_idx $head }
+                if {$head ne ""} {
+                    _add_call_to_parent $parent_sym_idx \
+                        [_maybe_two_word_ensemble $head $cmd_text]
+                }
             }
             return
         }
@@ -466,7 +469,8 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
             # plain pattern_a shapes shouldn't pull the strcat tail in.
             set head [_first_word_of_cmd $cmd_text]
             if {$head ne "" && ![_is_var_word $head]} {
-                _add_call_to_parent $parent_sym_idx $head
+                _add_call_to_parent $parent_sym_idx \
+                    [_maybe_two_word_ensemble $head $cmd_text]
             } else {
                 set second [_nth_word_of_cmd $cmd_text 1]
                 if {$second ne "" && ![_is_var_word $second]} {
@@ -507,7 +511,8 @@ proc ::jcm::bridge::_dispatch_event {ev body_src parent_src_offset parent_sym_id
             return
         }
         expand_args {
-            _add_call_to_parent $parent_sym_idx [dict get $ev name]
+            _add_call_to_parent $parent_sym_idx \
+                [_maybe_two_word_ensemble [dict get $ev name] $cmd_text]
             return
         }
         apply_lambda {
@@ -696,7 +701,12 @@ proc ::jcm::bridge::_handle_pattern_a {ev cmd_text abs_start abs_end parent_sym_
     _sweep_script_flags $cmd_text $abs_start $parent_sym_idx $parent_qname
 
     # Otherwise — treat the head as a callee on the parent.
-    _add_call_to_parent $parent_sym_idx $name
+    # P5.2.5: for kept-ensemble dispatchers (grid / pack / wm / winfo /
+    # image / font / delete) upgrade the 1-word emission to the 2-word
+    # (or 3-word for `image create TYPE`) phrase per convention §5.10
+    # when the next cmd_text word is a documented subcommand literal.
+    _add_call_to_parent $parent_sym_idx \
+        [_maybe_two_word_ensemble $name $cmd_text]
 }
 
 # Tk command flags whose value is a script body the bridge should recurse
@@ -1185,6 +1195,113 @@ proc ::jcm::bridge::_synth_slots_from_cmd {cmd_text} {
 # and passes `[list ::jcm::bridge::walk_recursive]` as the walker
 # callback so the recursion-table file stays free of bridge-namespace
 # dependencies.
+
+# ---------------------------------------------------------------------------
+# P5.2.5 — convention §5.10 / §7.5 kept-ensemble 2-word emission.
+#
+# Tk geometry / window-management ensembles (grid, pack, place, wm,
+# winfo, image, font) and the iTcl `delete` command are NOT on the
+# Tier 2 filter — they ARE recorded as architectural callees.  Per
+# §5.10 / §7.5 they use the 2-word naming convention when the second
+# word is a documented subcommand: `grid rowconfigure` instead of
+# bare `grid`, `winfo exists` instead of bare `winfo`, etc.  Bare
+# single-word forms (`grid $w`, `pack $w`) stay 1-word when the
+# second word is a value, not a subcommand.
+#
+# The bytecode walker emits these as pattern_a 1-word calls because
+# the Tcl compiler treats them as ordinary invocations (not specialized
+# ensemble dispatch).  This helper inspects cmd_text post-hoc and
+# upgrades to the 2-word form when the second word is a recognized
+# subcommand literal.
+#
+# The `image create TYPE` 3-word form (§5.10) is also recognized.
+# ---------------------------------------------------------------------------
+
+namespace eval ::jcm::bridge {
+    variable _kept_ensemble_subs
+    array unset _kept_ensemble_subs
+    array set _kept_ensemble_subs {}
+
+    # grid — Tk [grid.htm]
+    foreach _sub {
+        anchor bbox columnconfigure configure forget info location
+        propagate remove rowconfigure size slaves
+    } { set _kept_ensemble_subs(grid:$_sub) 1 }
+
+    # pack — Tk [pack.htm]
+    foreach _sub {
+        configure forget info propagate slaves
+    } { set _kept_ensemble_subs(pack:$_sub) 1 }
+
+    # place — Tk [place.htm]
+    foreach _sub {
+        configure forget info slaves
+    } { set _kept_ensemble_subs(place:$_sub) 1 }
+
+    # wm — Tk [wm.htm]
+    foreach _sub {
+        aspect attributes client colormapwindows command deiconify
+        focusmodel forget frame geometry group iconbitmap iconify
+        iconmask iconname iconphoto iconposition iconwindow manage
+        maxsize minsize overrideredirect positionfrom protocol
+        resizable sizefrom stackorder state title transient withdraw
+    } { set _kept_ensemble_subs(wm:$_sub) 1 }
+
+    # winfo — Tk [winfo.htm]
+    foreach _sub {
+        atom atomname cells children class colormapfull containing depth
+        exists fpixels geometry height id interps ismapped manager name
+        parent pathname pixels pointerx pointerxy pointery reqheight
+        reqwidth rgb rootx rooty screen screencells screendepth
+        screenheight screenmmheight screenmmwidth screenvisual
+        screenwidth server toplevel viewable visual visualid
+        visualsavailable vrootheight vrootwidth vrootx vrooty width x y
+    } { set _kept_ensemble_subs(winfo:$_sub) 1 }
+
+    # image — Tk [image.htm].  `image create TYPE` (3-word) is handled
+    # specially in _maybe_two_word_ensemble.
+    foreach _sub {
+        create delete height inuse names type types width
+    } { set _kept_ensemble_subs(image:$_sub) 1 }
+
+    # font — Tk [font.htm]
+    foreach _sub {
+        actual configure create delete families measure metrics names
+    } { set _kept_ensemble_subs(font:$_sub) 1 }
+
+    # iTcl delete — [ItclCmd/index]
+    foreach _sub {
+        object class namespace
+    } { set _kept_ensemble_subs(delete:$_sub) 1 }
+
+    unset _sub
+}
+
+# Return the multi-word phrase if $name is a kept-ensemble dispatcher
+# whose next cmd_text word is a recognized subcommand; otherwise
+# return $name unchanged.  Also handles the `image create TYPE` 3-word
+# form per convention §5.10 (v1.3 P3.1) when TYPE is a literal.
+proc ::jcm::bridge::_maybe_two_word_ensemble {name cmd_text} {
+    variable _kept_ensemble_subs
+    if {$name ni {grid pack place wm winfo image font delete}} {
+        return $name
+    }
+    set sub [_nth_word_of_cmd $cmd_text 1]
+    if {$sub eq "" || [_is_var_word $sub]} { return $name }
+    if {[string index $sub 0] eq "\["} { return $name }
+    if {![info exists _kept_ensemble_subs($name:$sub)]} { return $name }
+    # `image create TYPE`: when TYPE is a literal word, emit 3-word
+    # phrase per §5.10 (v1.3 P3.1 — image create photo, image create
+    # bitmap, etc.).  When TYPE is variable-substituted, stay 2-word.
+    if {$name eq "image" && $sub eq "create"} {
+        set type [_nth_word_of_cmd $cmd_text 2]
+        if {$type ne "" && ![_is_var_word $type] \
+                && [string index $type 0] ne "\["} {
+            return "image create $type"
+        }
+    }
+    return "$name $sub"
+}
 
 # First word of a command source — used to recover the call name when the
 # walker reduces the cmd to a strcat callback.

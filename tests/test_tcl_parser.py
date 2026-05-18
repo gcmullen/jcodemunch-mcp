@@ -2119,3 +2119,129 @@ class TestExprOperatorExclusion:
         assert not leaked, (
             f"§6.8 operators leaked across symbols: {leaked!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: P5.2.5 — convention §5.10 / §7.5 kept-ensemble 2-word emission
+#
+# The Tk geometry / window-management ensembles (grid, pack, place, wm,
+# winfo, image, font) and the iTcl `delete` command are NOT on the
+# Tier 2 filter — they ARE recorded as architectural callees.  When
+# the second cmd word is a documented subcommand, the bridge upgrades
+# the emission to the 2-word phrase (`grid rowconfigure`, `winfo exists`,
+# `wm title`, `delete object`).  `image create TYPE` is a 3-word special
+# case per §5.10.  When the second word is a value (variable, bracket
+# substitution), the bridge stays at the 1-word form.
+# ---------------------------------------------------------------------------
+
+
+KEPT_ENSEMBLE_FIXTURE = '''\
+proc widget_setup {win} {
+    # grid — 2-word with literal subcommand
+    grid rowconfigure $win 0 -weight 1
+    grid columnconfigure $win 0 -weight 1
+    grid forget $win.label
+    # grid — 1-word when next is a value (variable)
+    grid $win
+    # pack
+    pack configure $win -fill both
+    pack forget $win.btn
+    # place
+    place configure $win -x 0 -y 0
+    # wm
+    wm title . "App"
+    wm geometry . "800x600"
+    wm protocol . WM_DELETE_WINDOW "exit"
+    # winfo
+    winfo exists $win
+    winfo children $win
+    winfo class $win
+    # image create photo (3-word per §5.10)
+    image create photo myimg
+    image create bitmap mybmp
+    # image other subcommands (2-word)
+    image delete myimg
+    image names
+    # font
+    font create MyFont -family Arial
+    font configure MyFont -size 12
+    # iTcl delete
+    delete object foo
+    delete class Widget
+}
+'''
+
+
+class TestKeptEnsembleTwoWordEmission:
+    @pytest.fixture
+    def symbol(self):
+        symbols = parse_file(KEPT_ENSEMBLE_FIXTURE, "ensembles.tcl", "tcl")
+        target = next(s for s in symbols if s.name == "widget_setup")
+        return target
+
+    @pytest.mark.parametrize("two_word", [
+        "grid rowconfigure",
+        "grid columnconfigure",
+        "grid forget",
+        "pack configure",
+        "pack forget",
+        "place configure",
+        "wm title",
+        "wm geometry",
+        "wm protocol",
+        "winfo exists",
+        "winfo children",
+        "winfo class",
+        "image delete",
+        "image names",
+        "font create",
+        "font configure",
+        "delete object",
+        "delete class",
+    ])
+    def test_two_word_phrase_emitted(self, symbol, two_word):
+        assert two_word in symbol.call_references, (
+            f"expected 2-word phrase {two_word!r} in call_references; "
+            f"got {symbol.call_references!r}"
+        )
+
+    @pytest.mark.parametrize("three_word", [
+        "image create photo",
+        "image create bitmap",
+    ])
+    def test_image_create_type_emitted_as_three_word(self, symbol, three_word):
+        assert three_word in symbol.call_references, (
+            f"expected 3-word phrase {three_word!r} (per §5.10 P3.1) in "
+            f"call_references; got {symbol.call_references!r}"
+        )
+
+    def test_one_word_grid_when_next_arg_is_variable(self, symbol):
+        """`grid $win` — second word is a variable, must stay 1-word."""
+        assert "grid" in symbol.call_references, (
+            f"bare `grid` (when next word is $variable) missing from "
+            f"call_references = {symbol.call_references!r}"
+        )
+
+    def test_no_bare_dispatcher_when_subcommand_was_literal(self, symbol):
+        """When a kept-ensemble dispatcher appears alongside its 2-word
+        phrase in the SAME symbol, the bare-dispatcher emission must
+        not duplicate the phrase.  The fixture has both `grid
+        rowconfigure ...` (2-word) AND `grid $win` (1-word, kept because
+        $win is a value); both forms should be present once each."""
+        # The bare `grid` is legit (variable arg case); but pack and wm
+        # only appear in 2-word forms in the fixture, so bare `pack` / `wm`
+        # should NOT appear.
+        assert "pack" not in symbol.call_references, (
+            f"bare `pack` emitted alongside 2-word `pack configure` / "
+            f"`pack forget`; expected only 2-word forms. "
+            f"call_references = {symbol.call_references!r}"
+        )
+        assert "wm" not in symbol.call_references, (
+            f"bare `wm` emitted alongside 2-word `wm title` / `wm geometry`; "
+            f"expected only 2-word forms. "
+            f"call_references = {symbol.call_references!r}"
+        )
+        assert "winfo" not in symbol.call_references, (
+            f"bare `winfo` emitted alongside 2-word phrases; "
+            f"call_references = {symbol.call_references!r}"
+        )
