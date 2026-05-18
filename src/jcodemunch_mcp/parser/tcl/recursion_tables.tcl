@@ -111,11 +111,6 @@ set ::jcm::disasm::rectbl::SUBTABLE_A {
     {constructor    ""        2   lambda  constructor {}}
     {destructor     ""        1   lambda  destructor  {}}
     {namespace      eval      2   script  namespace   {}}
-    {itcl::class    ""        2   script  class       {}}
-    {::itcl::class  ""        2   script  class       {}}
-    {class          ""        2   script  class       {}}
-    {oo::class      create    3   script  class       {}}
-    {::oo::class    create    3   script  class       {}}
     {apply          ""        1   lambda  ""          {anonymous 1}}
     {foreach        ""        -1  script  ""          {}}
     {lmap           ""        -1  script  ""          {}}
@@ -125,12 +120,9 @@ set ::jcm::disasm::rectbl::SUBTABLE_A {
     {time           ""        1   script  ""          {}}
     {coroutine      ""        2   script  ""          {}}
     {bind           ""        -1  script  ""          {}}
-    {itk_component  add       -2  script  ""          {}}
-    {itk_option     define    -1  script  ""          {}}
 }
-# NOTE: body_arg_index = -1 means "last word"; -2 means "second-to-last" (for
-# itk_component add: CREATE is next-to-last; CONFIG last is skipped).
-# A positive int is the absolute 0-based word index.
+# NOTE: body_arg_index = -1 means "last word"; a positive int is the absolute
+# 0-based word index.
 # constructor 3-arg form (body at index 3) is handled by _constructor_dispatch.
 
 # ---------------------------------------------------------------------------

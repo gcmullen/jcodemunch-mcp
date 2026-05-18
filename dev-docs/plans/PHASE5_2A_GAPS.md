@@ -91,6 +91,36 @@ investigation, convention edits, or documented limitations.
 
 ## Surfaced during 5.2a generic-engine refactor
 
+### G12 — Class-body primitives still in SUBTABLE_A (Phase 5.5 architectural unification candidate)
+- **Where:** SUBTABLE_A in `recursion_tables.tcl` still owns rows for
+  `method`, `body`, `configbody`, `constructor`, `destructor`,
+  `public/private/protected method`, `namespace eval`. Most of these are
+  iTcl/TclOO **class-body keywords**, not Tcl primitives — they only have
+  meaning inside a class body. SUBTABLE_A handles them context-blindly
+  (emits a method symbol regardless of whether we're actually inside a
+  class body).
+- **Why it works today anyway:** the DSL grammars (snit/clay/itcl/oo_define/
+  oo_inline) intercept these directives when actually inside a DSL body
+  via the BODY_GRAMMAR_STACK pre-pass. SUBTABLE_A's rows only fire at
+  file scope or in non-DSL contexts, where they over-emit but
+  gold-corpus impact is small.
+- **What proper migration would require:**
+  1. Extend the ANNOTATIONS row format with an 8th column `extra_keywords`
+     (or similar) so DSL rows can propagate `out_of_line`, `visibility public`,
+     etc. The dedup fix (commit 383541c) depends on the `out_of_line` keyword
+     being on the symbol; losing it via migration re-introduces the dedup bug.
+  2. Extend body-grammar lookup to handle 2-word prefix matches
+     (`public method NAME`, `private method NAME`, etc.).
+  3. Port `_handle_namespace_eval`'s computed-namespace handler (`namespace
+     eval $varname { ... }`) into the DSL walker — or keep it as a sibling
+     SUBTABLE_C-style schema handler.
+- **Disposition candidate:** **Phase 5.5** — separate sub-step for
+  architectural unification. Not a recall lift; correctness improvement
+  (eliminates false-positive method emission in non-DSL contexts).
+  Not in 5.2a scope.
+
+
+
 ### G10 — Cross-file `namespace import` tracking (Phase 6 candidate)
 - **Where:** Bridge currently handles bare aliases (e.g. `class FooBar { ... }`
   in bluice.tcl after `namespace import ::itcl::*`) via unconditional
